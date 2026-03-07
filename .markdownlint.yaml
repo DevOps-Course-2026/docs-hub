@@ -1,0 +1,42 @@
+# markdownlint configuration for docs-hub
+# Docs: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+
+default: true
+
+# MD013 - Line length: disable (long tables, URLs, and Docusaurus MDX are unavoidable)
+MD013: false
+
+# MD033 - Inline HTML: allow (Docusaurus uses JSX/HTML components in markdown)
+MD033: false
+
+# MD041 - First line must be H1: enforce
+MD041: true
+
+# MD024 - No duplicate headings: allow siblings
+MD024:
+  siblings_only: true
+
+# MD029 - Ordered list style
+MD029:
+  style: ordered
+
+# MD007 - Unordered list indentation
+MD007:
+  indent: 2
+
+# MD030 - Spaces after list markers
+MD030:
+  ul_single: 1
+  ol_single: 1
+
+# MD040 - Fenced code blocks must have a language tag
+MD040: true
+
+# MD022 - Headings should be surrounded by blank lines
+MD022: true
+
+# MD025 - Only one H1 per document
+MD025: true
+
+# MD031 - Fenced code blocks should be surrounded by blank lines
+MD031: true
