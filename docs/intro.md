@@ -8,9 +8,11 @@ slug: /
 Welcome to the centralized documentation hub for the **DevOps Course 2026** GitHub Organization. This platform serves as the single source of truth for labs, infrastructure implementations, and architectural decisions.
 
 ## 🔭 The Vision
+
 Documentation is treated as **Infrastructure**. Every page here corresponds to a real-world implementation — tracked, versioned, and deployed the same way as code.
 
 ## 🏗️ How It Works
+
 This portal uses a **distributed documentation model**:
 
 - Each repository in the organization maintains its own `/docs` folder
@@ -20,6 +22,7 @@ This portal uses a **distributed documentation model**:
 👉 See [Platform / Auto-Sync](./platform/auto-sync) for the full architecture.
 
 ## 🧭 Navigating the Portal
+
 Use the sidebar on the left to explore all available documentation. Content is organized by repository and topic, and updates automatically as new labs and projects are added to the organization.
 
 :::tip
