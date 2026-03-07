@@ -5,6 +5,9 @@ import type * as Preset from '@docusaurus/preset-classic';
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
+  markdown: {
+    mermaid: true,
+  },
   title: 'DevOps Learning Portal',
   tagline: 'Documentation-as-Code · Labs · Architecture · GitOps',
   favicon: 'img/favicon.ico',
@@ -147,7 +150,12 @@ const config: Config = {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
     },
+    mermaid: {
+      theme: { light: 'neutral', dark: 'dark' },
+    },
   } satisfies Preset.ThemeConfig,
+
+  themes: ['@docusaurus/theme-mermaid'],
 };
 
 export default config;
