@@ -1,22 +1,24 @@
 ---
 ---
 
-# <repo-name>
+# DevOps Template
 
-> Replace this with a one-line description of the repository.
+> Golden-image template for all new repositories in the DevOps Course 2026 organization.
 
 ## Overview
 
-Add context here — what problem does this repo solve, what is being implemented.
+This repository is a GitHub template. Creating a new repo from it gives you:
 
-## Prerequisites
-
-- Prerequisite 1
-- Prerequisite 2
+- Markdown linting via a reusable GitHub Actions workflow
+- Automatic docs sync to the [DevOps Course 2026 Portal](https://DevOps-Course-2026.github.io/docs-hub/)
+- Consistent project structure and configuration
 
 ## Getting Started
 
-Describe how to run or use what's in this repo.
+1. Click **Use this template** on GitHub to create a new repository
+2. Add `DOCS_HUB_SYNC_APP_ID` and `DOCS_HUB_SYNC_APP_PRIVATE_KEY` secrets
+3. Edit this `README.md` with your repo's actual content
+4. Add portal docs under `docs/`
 
 ## Documentation
 
@@ -24,10 +26,5 @@ Full documentation is available on the
 [DevOps Course 2026 Portal](https://DevOps-Course-2026.github.io/docs-hub/).
 
 Docs in `docs/` sync automatically to the portal on every push to `main`.
-
-## CI Notes
-
-The first two workflow runs on this repo failed — they triggered before the
-template guard (`if: github.repository != 'DevOps-Course-2026/devops-template'`)
-was added to the workflows. Repos created from this template are unaffected;
-the workflows run normally on them.
+Root `README.md` becomes the portal landing page. Root `CONTRIBUTING.md`
+and other `.md` files sync as additional pages.
