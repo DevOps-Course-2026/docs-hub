@@ -179,7 +179,7 @@ Reserved for:
 All repos use [`markdownlint`](https://github.com/DavidAnson/markdownlint) to enforce formatting.
 Rules are defined in `.markdownlint.yaml` at each repo root.
 
-The lint workflow runs automatically on every push and pull request via a reusable GitHub Actions workflow defined in this repo at [`.github/workflows/reusable-lint-docs.yml`](./.github/workflows/reusable-lint-docs.yml).
+The lint workflow runs automatically on every push and pull request via a reusable GitHub Actions workflow defined in this repo at [`.github/workflows/reusable-lint-docs.yml`](https://github.com/DevOps-Course-2026/.github/blob/main/.github/workflows/reusable-lint-docs.yml).
 
 Run locally before pushing:
 
