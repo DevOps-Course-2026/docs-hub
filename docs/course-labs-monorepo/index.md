@@ -1,4 +1,5 @@
 ---
+sidebar_label: Course Labs Monorepo
 ---
 
 # DevOps Course 2026 — Labs Monorepo
