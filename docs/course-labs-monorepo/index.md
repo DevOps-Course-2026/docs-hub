@@ -15,7 +15,7 @@ Each lab lives in its own folder with a `README.md` describing the goal, prerequ
 
 | Lab | Topic |
 | --- | --- |
-| [Lab 8](./lab%208/README.md) | ArgoCD & GitOps |
+| [Lab 8](./labs/lab-8/) | ArgoCD & GitOps |
 
 > Labs will be added as the course progresses.
 
@@ -25,13 +25,19 @@ Each lab lives in its own folder with a `README.md` describing the goal, prerequ
 
 ```text
 course-labs-monorepo/
-  README.md          ← you are here
+  README.md            ← you are here
+  docs/
+    labs/
+      lab-N/
+        index.md       ← full lab content (syncs to portal)
+        assets/        ← screenshots and diagrams
   lab-N/
-    README.md        ← lab instructions & notes
-    <lab files>
+    README.md          ← stub: title + portal link
 ```
 
 ## Docs
 
-Full course documentation is available at the [docs-hub](https://github.com/DevOps-Course-2026/docs-hub) repository.
-Lab READMEs from this repo are automatically synced there on every push to `main`.
+Full course documentation is available on the
+[DevOps Course 2026 Portal](https://DevOps-Course-2026.github.io/docs-hub/).
+
+Lab docs from this repo sync automatically to the portal on every push to `main`.
