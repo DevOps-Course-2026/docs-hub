@@ -1,4 +1,5 @@
 ---
+sidebar_label: Contributing
 ---
 
 # Lab & Project Authoring Guide
