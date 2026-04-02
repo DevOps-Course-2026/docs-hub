@@ -240,7 +240,7 @@ NAME     STATUS   AGE
 argocd   Active   5s
 ```
 
-![ArgoCD namespace created](./assets/task2.png)
+![ArgoCD namespace created](./assets/task2-namespace.png)
 
 ---
 
