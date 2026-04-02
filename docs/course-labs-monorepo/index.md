@@ -27,13 +27,19 @@ Each lab lives in its own folder with a `README.md` describing the goal, prerequ
 ```text
 course-labs-monorepo/
   README.md            ← you are here
+  labs/
+    lab-N/
+      README.md        ← stub: title + portal link
+    extras/
+      <name>/          ← runnable infrastructure (compose, Makefile, config)
   docs/
     labs/
       lab-N/
         index.md       ← full lab content (syncs to portal)
         assets/        ← screenshots and diagrams
-  lab-N/
-    README.md          ← stub: title + portal link
+      extras/
+        <name>/
+          index.md     ← extra docs (syncs to portal)
 ```
 
 ## Docs

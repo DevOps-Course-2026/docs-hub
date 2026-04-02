@@ -69,10 +69,10 @@ The `LimitMEMLOCK=infinity` needed for `mlock()` is already set inside the Quadl
 
 ## Task 1 — Understand the Repository Structure
 
-The files for this extra live at `extras/openbao-eso/` in the `course-labs-monorepo` root (not inside `docs/` — these are runnable infrastructure files, not portal content):
+The files for this extra live at `labs/extras/openbao-eso/` in the `course-labs-monorepo` root (not inside `docs/` — these are runnable infrastructure files, not portal content):
 
 ```text
-extras/openbao-eso/
+labs/extras/openbao-eso/
 ├── Makefile              ← Single entry point for all operations (setup, install, verify, done)
 ├── openbao.container     ← Quadlet unit template (the only file you deploy)
 ├── config/
@@ -88,24 +88,20 @@ At the monorepo root, a pre-commit hook lives at `.githooks/pre-commit`. Activat
 
 ```bash
 # From course-labs-monorepo/
-make hooks
+git config core.hooksPath .githooks
 ```
 
 This blocks accidental commits of `keys.json`, `root_token.txt`, `.env`, and `*.key`, and warns you when infra files change without a corresponding doc update.
 
 ### Summary
 
-You now know where the infrastructure files live (`extras/openbao-eso/`), which directories are gitignored, and that the pre-commit hook is active.
+You now know where the infrastructure files live (`labs/extras/openbao-eso/`), which directories are gitignored, and that the pre-commit hook is active.
 
 ---
 
-## Task 2 — Activate the Workflow Guards
+## Task 2 — Activate the Pre-Commit Hook
 
-Before touching any files, activate the pre-commit hook and verify the Makefile works. This is the foundation that keeps your deployed state and git history in sync.
-
-### Step 1 — Activate the Pre-Commit Hook
-
-Run once per clone of the repo:
+Run once per clone of the repo to register the pre-commit hook:
 
 ```bash
 # From course-labs-monorepo/
@@ -125,33 +121,13 @@ The hook enforces three things on every `git commit`:
 | --- | --- |
 | `keys.json`, `root_token.txt`, `.env`, `*.key` staged | **Blocks** the commit |
 | Infra files changed without doc update | **Warns** (does not block) |
-| `openbao.container` changed | Reminds you to run `make install` after push |
-
-### Step 2 — Verify the Makefile
-
-```bash
-cd extras/openbao-eso
-make help
-```
-
-Expected output: a table of all available targets. If `make` is not installed: `sudo dnf install make`.
-
-The Makefile is the single entry point for all operations from here on. The most important ones:
-
-| Target | When to use |
-| --- | --- |
-| `make status` | **Start of every session** — deployment state + last 5 commits + working tree |
-| `make setup` | First time — creates dirs, generates certs, installs CA trust |
-| `make install` | After any change to `openbao.container` or `openbao.hcl` |
-| `make verify` | Any time — detects drift between git and deployed state |
-| `make restart` | Tests auto-recovery (confirms Quadlet `Restart=on-failure` works) |
-| `make done` | **End of every session** — checks for uncommitted changes and drift |
-
-> **Discipline:** start every session with `make status` (deployment state + last 5 commits + working tree), end every session with `make done` (drift check + uncommitted files reminder). Two commands, no blind spots.
+| `openbao.container` changed | Reminds you to re-render and redeploy the unit (see Task 3) |
 
 ### Summary
 
-`make status` and `make done` bookend every session. The pre-commit hook and `make verify` catch drift before it reaches `main`.
+The pre-commit hook is active. It blocks secret files from being committed and warns on infra changes without a doc update.
+
+> **Make alternative:** `make hooks` runs the same `git config` command above.
 
 ---
 
@@ -167,7 +143,7 @@ OpenBao runs as a rootless Podman container managed by **Quadlet** — the syste
 
 This section shows every step manually so you understand what each command does. At the end, `make setup` automates all of it.
 
-All commands run from `extras/openbao-eso/`.
+All commands run from `labs/extras/openbao-eso/`.
 
 #### Step 1 — Create the Runtime Directories
 
@@ -258,6 +234,8 @@ Key things to observe:
 - `Volume=${BAODIR}/config:/openbao/config:ro,U,Z` — `${BAODIR}` is the **only** substituted variable; `:U` auto-chowns the host directory to the container UID; `:Z` sets a private SELinux MCS label
 - `AddCapability=IPC_LOCK` — allows `mlock()` to prevent secrets touching swap
 - `NoNewPrivileges=true` — the process cannot escalate its own privileges
+- `Environment=BAO_ADDR=https://127.0.0.1:8200` — CLI connection address; must match the TLS cert's SAN (`0.0.0.0` is only the bind address, not a valid TLS name)
+- `Environment=BAO_CACERT=/openbao/config/certs/bao.crt` — CA cert for the CLI to verify the server's TLS certificate
 - `LimitMEMLOCK=infinity` in `[Service]` — removes the rootless memlock limit
 - `Restart=on-failure` in `[Service]` — systemd restarts the container if it crashes
 
@@ -273,7 +251,8 @@ Key things to observe:
 | `Volume=…/certs:/openbao/config/certs:ro,U,Z` | Mounts TLS cert and key read-only into a subdirectory of the config mount. Same `:U,Z` flags for the same reasons |
 | `Volume=…/bao-data:/openbao/data:U,Z` | Read-write mount for Raft storage — OpenBao writes its encrypted database here |
 | `Volume=…/logs:/openbao/logs:U,Z` | Read-write mount for audit logs — OpenBao appends to this on every operation |
-| `Environment=BAO_ADDR=https://0.0.0.0:8200` | Tells the OpenBao CLI inside the container where the server listens. `https://` because TLS is enabled in `openbao.hcl` |
+| `Environment=BAO_ADDR=https://127.0.0.1:8200` | Tells the OpenBao CLI inside the container where the server API is. Must match an IP/hostname in the TLS cert's SAN — `0.0.0.0` is the bind address (all interfaces) and is not a valid TLS subject. `https://` because TLS is enabled in `openbao.hcl` |
+| `Environment=BAO_CACERT=/openbao/config/certs/bao.crt` | CA certificate the CLI uses to verify the server's TLS certificate. Without this, every `bao` command inside the container fails with `x509: certificate signed by unknown authority` — the self-signed cert is not in the container's system trust store |
 | `Exec=bao server -config=…` | Explicit startup command — works regardless of the image's `ENTRYPOINT` |
 | `LimitMEMLOCK=infinity` | Removes the rootless memlock limit for this unit — no separate systemd drop-in file needed, unlike Podman Compose |
 | `Restart=on-failure` | systemd restarts the container if it exits non-zero — not if you manually stop it with `systemctl stop` |
@@ -315,7 +294,14 @@ The deployed unit is now read-only. You cannot edit it in-place. To update it yo
 
 1. Change `openbao.container` in the repo
 2. Commit
-3. Re-run the render step
+3. Re-render: temporarily unlock, overwrite, re-lock:
+
+```bash
+chmod 600 ~/.config/containers/systemd/openbao.container
+envsubst '${BAODIR}' < openbao.container \
+  > ~/.config/containers/systemd/openbao.container
+chmod 400 ~/.config/containers/systemd/openbao.container
+```
 
 This is the filesystem-level enforcement of the SOC 2 principle: no change without a git record.
 
@@ -370,23 +356,38 @@ grep -E "^(Image|PublishPort|Volume)" ~/.config/containers/systemd/openbao.conta
 
 #### Step 6 — Verify
 
-```bash
-make verify
-```
+Run three checks to confirm the service is healthy.
 
-This runs three checks in sequence: drift detection (re-renders the template and diffs against deployed), service status, and `bao status`. All three must pass before continuing.
-
-#### Step 7 — Test Auto-Recovery
-
-Verify that Quadlet's `Restart=on-failure` actually works — this is the availability pillar of SOC 2:
+**Check 1 — Drift detection.** Re-render the template and diff it against the deployed unit:
 
 ```bash
-make restart
+export BAODIR=$(pwd)
+envsubst '${BAODIR}' < openbao.container \
+  | diff - ~/.config/containers/systemd/openbao.container \
+  && echo "  [ok] no drift"
 ```
 
-Expected: `[ok] service recovered after restart`. If it prints `[FAIL]`, run `make logs` to diagnose.
+No `diff` output (and the `[ok]` line printed) means the deployed unit exactly matches what is in git.
 
-Expected:
+**Check 2 — Service status:**
+
+```bash
+systemctl --user is-active openbao.service
+```
+
+#### Expected Output
+
+```text
+active
+```
+
+**Check 3 — OpenBao seal status:**
+
+```bash
+podman exec openbao-server bao status
+```
+
+#### Expected Output
 
 ```text
 Key                Value
@@ -395,6 +396,34 @@ Seal Type          shamir
 Initialized        false
 Sealed             true
 ```
+
+All three must pass before continuing.
+
+> **Make alternative:** `make verify` runs all three checks in sequence.
+
+#### Step 7 — Test Auto-Recovery
+
+Verify that Quadlet's `Restart=on-failure` actually works — this is the availability pillar of SOC 2:
+
+```bash
+systemctl --user restart openbao.service
+sleep 2
+systemctl --user is-active openbao.service
+```
+
+#### Expected Output
+
+```text
+active
+```
+
+`active` confirms the service recovered. If not, inspect the logs:
+
+```bash
+journalctl --user -u openbao.service --no-pager -n 50
+```
+
+> **Make alternative:** `make restart` runs the restart, waits, and checks recovery in one command. `make logs` tails live logs.
 
 ---
 
@@ -423,10 +452,20 @@ When OpenBao starts, it does not have the master key in memory. It is **sealed**
 Initialization generates the master key and splits it into shares. Run it exactly once per cluster:
 
 ```bash
-make init
+podman exec openbao-server bao operator init -key-shares=3 -key-threshold=2 | tee bao-init.txt
 ```
 
-This runs `bao operator init -key-shares=3 -key-threshold=2` inside the container and saves the output to `bao-init.txt` (already in `.gitignore`).
+Breaking this down:
+
+| Part | What it does |
+| --- | --- |
+| `podman exec openbao-server` | Run a command inside the running container named `openbao-server` |
+| `bao operator init` | OpenBao CLI command that initializes the server for the first time |
+| `-key-shares=3` | Split the master key into 3 pieces (key shares) |
+| `-key-threshold=2` | Require any 2 of the 3 shares to unseal — no single person holds the full key |
+| `\| tee bao-init.txt` | Print the output to the terminal **and** save it to `bao-init.txt` at the same time (`bao-init.txt` is already in `.gitignore`) |
+
+> **Make alternative:** `make init` runs the same command and prints a reminder to store the keys offline.
 
 #### Expected Output
 
@@ -471,9 +510,11 @@ The `*-init.txt` pattern is in `.gitignore` — this file will never be committe
 Provide 2 of the 3 key shares (the threshold you set in Step 1):
 
 ```bash
-make unseal KEY=<key-1>
-make unseal KEY=<key-2>
+podman exec openbao-server bao operator unseal <key-1>
+podman exec openbao-server bao operator unseal <key-2>
 ```
+
+> **Make alternative:** `make unseal KEY=<key>` — run twice, once per share.
 
 After the second key, verify the seal status:
 
@@ -510,22 +551,24 @@ is already stored in the token helper.
 
 > **Production Note:** The root token has unrestricted access to everything — treat it like the root password of a database. After initial setup, create a scoped admin token or use OIDC auth, and revoke the root token. For this lab we use it throughout for simplicity.
 
-### Step 4 — Enable the Audit Log
+### Step 4 — Verify the Audit Log
 
-Enable the file audit device so every request is logged to the mounted `logs/` directory:
+The audit device is declared in `config/openbao.hcl`. API-driven audit device creation (`bao audit enable`) was **intentionally disabled** in OpenBao 2.5.x as a security fix for [CVE-2025-54997](https://github.com/openbao/openbao/security/advisories/GHSA-xp75-r577-cvhp) — file-type audit devices allowed writing to arbitrary paths, breaching privilege separation.
+
+The device activates automatically when the server unseals (not at raw startup). Verify it is active:
 
 ```bash
-make audit-enable
+podman exec openbao-server bao audit list
 ```
 
-This enables the log at `/openbao/logs/audit.log` and immediately lists enabled devices to confirm.
+> **Make alternative:** `make audit-enable` runs the same verification.
 
 #### Expected Output
 
 ```text
-Path     Type    Description
-----     ----    -----------
-file/    file    n/a
+Path          Type    Description
+----          ----    -----------
+audit-log/    file    n/a
 ```
 
 ### Summary

@@ -31,7 +31,7 @@ Run from `course-labs-monorepo/`:
 
 These sub-directories each have their own `Makefile`:
 
-- [`extras/openbao-eso`](extras/openbao-eso/Makefile)
+- [`labs/extras/openbao-eso`](labs/extras/openbao-eso/Makefile)
 
 ---
 
@@ -43,26 +43,26 @@ the whole repo. Keep it in sync.
 
 ### Rule: one commit, three artifacts
 
-When adding ANY new lab (`docs/labs/lab-N/`) or extra (`extras/<name>/`), the **same
+When adding ANY new lab (`docs/labs/lab-N/`) or extra (`labs/extras/<name>/`), the **same
 commit** MUST include all three:
 
 | Artifact | Minimum required targets |
 | --- | --- |
-| `extras/<name>/Makefile` | `help`, `setup`, `status`, `done`, `check-drift`, `verify` |
-| Root `Makefile` update | `extras/<name>` appended to the `EXTRAS` list |
+| `labs/extras/<name>/Makefile` | `help`, `setup`, `status`, `done`, `check-drift`, `verify` |
+| Root `Makefile` update | `labs/extras/<name>` appended to the `EXTRAS` list |
 | Lab doc `docs/labs/.../index.md` | At least one Task covering the `make` workflow |
 
 ### How to add a new extra
 
-1. Create `extras/<name>/Makefile` — use `extras/openbao-eso/Makefile` as a template,
+1. Create `labs/extras/<name>/Makefile` — use `labs/extras/openbao-eso/Makefile` as a template,
    strip product-specific targets, keep the structural skeleton.
 
 2. Add one line in `course-labs-monorepo/Makefile`:
 
    ```makefile
    EXTRAS := \
-     extras/openbao-eso \
-     extras/<name>
+     labs/extras/openbao-eso \
+     labs/extras/<name>
    ```
 
 3. Verify from the repo root:
