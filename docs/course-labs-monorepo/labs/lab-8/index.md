@@ -202,3 +202,295 @@ Creating a `ValidatingWebhookConfiguration` is powerful — it registers middlew
 | **Audit Logging** | API server audit log | Detects and records every write to etcd |
 
 > **Analogy:** This is the Kubernetes equivalent of SQL injection. Just as parameterized queries and least-privilege DB users prevent SQL injection, RBAC and policy engines prevent malicious object injection into etcd. The most dangerous variant is a **MutatingWebhookConfiguration** — an attacker who can create one can silently modify every pod spec being deployed (e.g., swap container images, inject environment variables).
+
+---
+
+## Task 2 — Install ArgoCD
+
+Before installing ArgoCD, we need a dedicated namespace for all its components, then apply the official manifests.
+
+> Reference: [ArgoCD Getting Started Guide](https://argo-cd.readthedocs.io/en/stable/getting_started/)
+
+### Why a Separate Namespace?
+
+ArgoCD deploys several components (API server, repo server, application controller, Redis, Dex, etc.). Placing them in their own namespace:
+
+- **Isolates** ArgoCD resources from application workloads
+- **Simplifies RBAC** — you can grant access to the ArgoCD namespace without exposing other namespaces
+- **Makes cleanup easy** — deleting the namespace removes everything ArgoCD-related
+
+---
+
+### Step 1 — Create the Namespace
+
+```bash
+kubectl create namespace argocd
+```
+
+### Step 2 — Verify the Namespace
+
+```bash
+kubectl get ns argocd
+```
+
+#### Expected Output
+
+```text
+NAME     STATUS   AGE
+argocd   Active   5s
+```
+
+![ArgoCD namespace created](./assets/task2.png)
+
+---
+
+### Step 3 — Apply the ArgoCD Manifests
+
+```bash
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+#### Command Breakdown
+
+| Argument | Explanation |
+| --- | --- |
+| `kubectl apply` | Declaratively applies a configuration to the cluster. It creates resources if they don't exist, or updates them to match the desired state |
+| `-n argocd` | Targets the `argocd` namespace — all resources defined in the manifest will be created inside this namespace |
+| `--server-side` | Uses **Server-Side Apply** instead of the default client-side apply. The API server itself manages field ownership and merges, which is more reliable for large manifests with many fields and avoids client-side merge conflicts |
+| `--force-conflicts` | If another field manager (e.g., a previous `kubectl apply`) owns a field that this apply wants to change, force the update instead of failing with a conflict error. This is especially useful when re-applying or upgrading ArgoCD |
+| `-f <url>` | Specifies the manifest source. Here it points to the raw YAML file hosted on GitHub under the `stable` branch of the ArgoCD repository. This single file contains all the CRDs, Deployments, Services, ConfigMaps, RBAC rules, and other resources ArgoCD needs |
+
+> **Note:** The ArgoCD installation manifest is large and complex. Client-side apply can struggle with annotation size limits (`kubectl.kubernetes.io/last-applied-configuration`) and field ownership conflicts during upgrades. Server-side apply with `--force-conflicts` avoids both issues cleanly.
+
+---
+
+### Step 4 — Verify the Installation
+
+Check that all ArgoCD pods are running in the `argocd` namespace:
+
+```bash
+kubectl get pods -n argocd
+```
+
+You should see several pods — the core ArgoCD components:
+
+| Pod | Role |
+| --- | --- |
+| `argocd-server` | The API & UI server — serves the web dashboard and handles API requests |
+| `argocd-repo-server` | Clones Git repositories, renders manifests (Helm, Kustomize, plain YAML) |
+| `argocd-application-controller` | The core reconciliation loop — compares desired state (Git) with live state (cluster) and syncs |
+| `argocd-applicationset-controller` | Manages `ApplicationSet` resources for templating multiple Applications |
+| `argocd-redis` | In-memory cache used by the server and controller for performance |
+| `argocd-dex-server` | Handles SSO/OIDC authentication (identity provider integration) |
+| `argocd-notifications-controller` | Sends notifications (Slack, email, webhooks) on sync events |
+
+![ArgoCD pods running](./assets/task2-pods.png)
+
+---
+
+## Task 3 — Access the ArgoCD UI
+
+With ArgoCD installed, we need to expose its server to access the web dashboard. There are two approaches depending on the environment.
+
+### Port-Forward vs Ingress / Load Balancer
+
+| | Port-Forward | Ingress / Load Balancer |
+| --- | --- | --- |
+| **How it works** | Creates a temporary tunnel from your local machine directly to a pod/service via the kubectl proxy | Exposes the service through a stable external endpoint (hostname or IP) |
+| **Persistence** | Lives only as long as the terminal session running the command | Permanent — survives pod restarts, kubectl sessions, reboots |
+| **Discoverability** | Only accessible from the machine running the command | Accessible to anyone with network access to the endpoint |
+| **TLS / Certificates** | Tunnels raw traffic — TLS is handled by the destination service | Full TLS termination at the Ingress or LB layer with proper certs |
+| **Use case** | Local development, debugging, one-off access | Production, shared access, always-on services |
+| **Setup complexity** | Zero — one command | Requires Ingress controller, DNS record, and TLS certificate |
+
+> **Production Note:** In production you would expose ArgoCD via an Ingress resource (pointing to the Ingress controller we deployed in Task 1) or a cloud Load Balancer, with a real DNS name and a TLS certificate managed by cert-manager. In this lab we are running locally on Minikube, so `kubectl port-forward` is the fastest and simplest option — no DNS, no certificates, no external IP needed.
+
+---
+
+### Step 1 — Port-Forward the ArgoCD Server
+
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+```
+
+#### Command Breakdown
+
+| Part | Explanation |
+| --- | --- |
+| `kubectl port-forward` | Opens a tunnel between your local machine and a resource inside the cluster |
+| `svc/argocd-server` | Targets the `argocd-server` **Service** (not just a single pod) — kubectl will pick one of the backing pods automatically |
+| `-n argocd` | Specifies the namespace where the service lives |
+| `8080:443` | Maps **local port 8080** → **service port 443**. ArgoCD's server listens on HTTPS (443); we access it locally on 8080 to avoid requiring root privileges |
+
+> Keep this terminal open. The tunnel stays alive only while the command is running.
+
+---
+
+### Step 2 — Open the Dashboard
+
+Navigate to:
+
+```text
+https://localhost:8080
+```
+
+Your browser will show a certificate warning because ArgoCD uses a self-signed certificate by default. Accept the warning to proceed.
+
+![ArgoCD UI login page](./assets/task3-argocd-ui.png)
+
+---
+
+### Step 3 — Retrieve the Initial Admin Password
+
+ArgoCD generates a random initial password for the `admin` user and stores it in a Kubernetes Secret. Retrieve it with:
+
+```bash
+kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath="{.data.password}" | base64 --decode && echo
+```
+
+Log in with:
+
+- **Username:** `admin`
+- **Password:** the value printed above
+
+> **Note:** Change this password immediately after first login and delete the `argocd-initial-admin-secret` Secret — ArgoCD does not need it after the initial setup.
+
+---
+
+### Why Kubernetes Secrets Are Not Actually Secret
+
+The command above reveals a fundamental problem: the password is stored as a Kubernetes Secret, but Kubernetes Secrets are **not encrypted by default**. They are only **base64-encoded**.
+
+Base64 is an encoding format, not encryption. Anyone who can run `kubectl get secret` can decode the value in seconds:
+
+```bash
+echo "dGhpcyBpcyBub3QgZW5jcnlwdGVk" | base64 --decode
+# this is not encrypted
+```
+
+In practice this means:
+
+| Where secrets live | What "protection" exists | Who can read them |
+| --- | --- | --- |
+| etcd (on disk) | None by default — stored as base64 plaintext | Anyone with etcd access |
+| Kubernetes API | RBAC controls `get`/`list` on Secret objects | Any user/pod with the right role |
+| Pod environment | Injected as env vars or mounted files | Any process inside the pod |
+| `git` (if committed) | None | Anyone with repo access |
+
+> **Warning:** Never commit Secrets to Git — even base64-encoded values are trivially reversible. Tools like `git-secrets` or `gitleaks` can scan for accidental commits.
+
+#### What You Can Do
+
+There are several layers of mitigation, each addressing a different part of the problem:
+
+| Approach | What it solves | Limitation |
+| --- | --- | --- |
+| **RBAC** | Restricts who can read Secrets via the API | Does not protect etcd-level access |
+| **etcd encryption at rest** | Encrypts Secret data in etcd using an AES key | The AES key itself must be stored somewhere |
+| **Sealed Secrets** | Encrypts the Secret before it enters the cluster (safe to commit) | Cluster-specific — key lives in the cluster |
+| **External Secrets Operator (ESO) + Vault / OpenBao** | Secrets never live in Kubernetes at all — fetched at runtime from a dedicated secrets store | Requires external infrastructure |
+
+The gold standard is the last approach: keep secrets entirely outside the cluster in a dedicated secrets manager, and inject them into pods only at runtime. This lab series implements that using **OpenBao** (the open-source continuation of HashiCorp Vault) as the secrets backend, connected to the cluster via the External Secrets Operator.
+
+> **Note:** The OpenBao + ESO setup — including a Docker Compose file to run OpenBao alongside Minikube — is covered in a dedicated lab. That lab also migrates the ArgoCD admin secret away from a Kubernetes Secret entirely.
+
+---
+
+## Deep Dive — How `kubectl port-forward` Works
+
+> This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
+
+### The Tunnel Path
+
+When you run `kubectl port-forward`, no SSH is involved. Instead, kubectl reuses the **existing authenticated HTTPS connection** to the Kubernetes API server. The actual data path is:
+
+```text
+Browser → localhost:8080 → kubectl (local proxy) → HTTPS → API Server → kubelet → container port 443
+```
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant kubectl as kubectl (local process)
+    participant API as API Server
+    participant kubelet as kubelet (node)
+    participant Pod as argocd-server pod
+
+    Browser->>kubectl: TCP connect to localhost:8080
+    kubectl->>API: HTTPS upgrade request (SPDY/HTTP2)
+    API->>kubelet: Forward stream to pod
+    kubelet->>Pod: Connect to container port 443
+    Note over kubectl,Pod: Bidirectional byte stream established
+    Browser->>Pod: HTTP/S traffic flows through tunnel
+    Pod-->>Browser: Response flows back
+```
+
+The API server acts as a **relay** — it does not inspect the tunnelled traffic, it just forwards raw bytes between kubectl and the kubelet on the node where the pod is running.
+
+---
+
+### Why the Terminal Must Stay Open
+
+`kubectl port-forward` is a **long-running foreground process**. It:
+
+1. Opens a local TCP listener on `127.0.0.1:8080`
+2. For every incoming connection, upgrades the API server connection to a streaming channel (SPDY or HTTP/2)
+3. Copies bytes bidirectionally between the local socket and the remote pod
+
+When you close the terminal (or press `Ctrl+C`), the local listener is torn down and the API server closes the upstream stream. The pod itself is unaffected — only future connections to `localhost:8080` will fail.
+
+---
+
+### Security — Why Only You Can Access It
+
+By default, `kubectl port-forward` binds to `127.0.0.1` (loopback interface only). This means:
+
+- Only processes running on **your local machine** can connect to port 8080
+- Nothing on your network (other machines, VMs, containers) can reach it
+- No firewall rule or DNS entry is created
+
+> **Note:** If you explicitly pass `--address 0.0.0.0`, the listener binds to all interfaces and becomes reachable from the network. Never do this in a shared or untrusted environment.
+
+---
+
+### Is It SSH? Where Are the Keys?
+
+No — `kubectl port-forward` is **not SSH**. There is no SSH daemon running, no SSH keys, no `authorized_keys` file.
+
+Authentication is handled entirely by your **kubeconfig** file (`~/.kube/config`). The kubeconfig contains one of:
+
+| Auth method | What it looks like in kubeconfig | How it proves identity |
+| --- | --- | --- |
+| **Client certificate** | `client-certificate-data` + `client-key-data` | TLS mutual auth — your cert was signed by the cluster CA |
+| **Bearer token** | `token` | A service account or user token issued by the API server |
+| **OIDC** | `exec` plugin | kubectl calls an external binary to fetch a short-lived token |
+
+For Minikube, the default is a **client certificate** — Minikube generates a CA, signs a cert for your user, and writes both the cert and key into `~/.kube/config` automatically when you run `minikube start`.
+
+When kubectl makes the HTTPS connection to the API server, it presents this client certificate. The API server verifies it against its CA, then checks RBAC to confirm your user has permission to use `pods/portforward`. If both checks pass, the tunnel is opened.
+
+```mermaid
+sequenceDiagram
+    participant kubectl
+    participant API as API Server
+    participant RBAC as RBAC Engine
+
+    kubectl->>API: TLS handshake (presents client cert from kubeconfig)
+    API->>API: Verify cert against cluster CA
+    API->>RBAC: Can user perform pods/portforward in namespace argocd?
+    RBAC-->>API: Allowed
+    API-->>kubectl: 101 Switching Protocols (stream upgrade)
+    Note over kubectl,API: Encrypted tunnel open — no SSH, no keys beyond kubeconfig
+```
+
+### Comparison: `kubectl port-forward` vs SSH Tunneling
+
+| | `kubectl port-forward` | SSH tunnel (`ssh -L`) |
+| --- | --- | --- |
+| **Protocol** | HTTPS + SPDY/HTTP2 stream upgrade | SSH (TCP port 22) |
+| **Auth** | kubeconfig (client cert or token) | SSH key pair or password |
+| **Requires SSH daemon** | No | Yes — `sshd` must be running on the remote host |
+| **Bound to localhost** | Yes (by default) | Yes (by default) |
+| **Traffic encrypted** | Yes — TLS to API server | Yes — SSH encryption |
+| **Scope** | Pod/service port inside a cluster | Any port on any SSH-accessible host |
