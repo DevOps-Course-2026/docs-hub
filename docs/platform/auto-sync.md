@@ -14,11 +14,14 @@ GitHub Organization: DevOps-Course-2026
 ├── docs-hub/              ← Docusaurus engine (this repo)
 │   └── docs/              ← Aggregated docs land here
 │
-├── labs-monorepo/
+├── course-labs-monorepo/
 │   └── docs/              ← Satellite: auto-synced on push
 │
-├── gitops-manifests/
+├── devops-template/
 │   └── docs/              ← Satellite: auto-synced on push
+│
+├── .github/
+│   └── CONTRIBUTING.md    ← Satellite: root .md files synced on push
 │
 └── <any-future-repo>/
     └── docs/              ← Satellite: auto-synced on push
