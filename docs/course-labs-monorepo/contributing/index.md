@@ -17,13 +17,13 @@ workflow will regenerate this page on the next push to `main`.
 Run from `course-labs-monorepo/`:
 
 | Command | Purpose |
-| --- | --- |
-| `make status` | Whole-repo status: git log + working tree + all extras deployment state |
-| `make lint` | Lint all markdown docs in the repo |
-| `make lint-watch` | Watch mode: re-lint on every file change |
-| `make hooks` | Activate the pre-commit hook for this clone (run once after cloning) |
-| `make done` | End-of-session guard: uncommitted changes + lint check |
-| `make check-registry` | Verify every entry in EXTRAS still has a Makefile |
+|---|---|
+| `make status`            | Whole-repo status: git log + working tree + all extras deployment state |
+| `make lint`              | Lint all markdown docs in the repo |
+| `make lint-watch`        | Watch mode: re-lint on every file change |
+| `make hooks`             | Activate the pre-commit hook for this clone (run once after cloning) |
+| `make done`              | End-of-session guard: uncommitted changes + lint check |
+| `make check-registry`    | Verify every entry in EXTRAS still has a Makefile |
 
 ---
 
