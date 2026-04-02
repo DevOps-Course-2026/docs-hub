@@ -595,6 +595,10 @@ Success! Enabled the kv-v2 secrets engine at: secret/
 
 ### Step 2 — Store the ArgoCD Admin Password
 
+> **Lab simplification:** In this step we store the **plaintext** initial password in OpenBao and sync it directly as a Kubernetes Secret. This works for the lab because ArgoCD's `argocd-initial-admin-secret` already contains the plaintext password — we are simply moving its source of truth from the cluster into OpenBao.
+>
+> In production, ArgoCD's real config secret (`argocd-secret`) expects a **bcrypt hash** of the admin password — not plaintext. The correct workflow is: generate a random password → hash it with bcrypt → store the hash in OpenBao → sync the hash into `argocd-secret`. This way the plaintext password never exists in Kubernetes or Git. The full production workflow — including OIDC/SSO integration and local admin lockout — is covered in the [Deep Dive — The Production ArgoCD Identity Stack](#deep-dive--the-production-argocd-identity-stack-eso--sso--openbao) section at the end of this lab.
+
 Write the ArgoCD admin password into OpenBao:
 
 ```bash
@@ -979,6 +983,317 @@ podman inspect openbao/openbao:2.5.1 --format '{{.Digest}}'
 Combine with Renovate Bot: when a new version is released, Renovate opens a PR that updates both the tag (for readability) and the digest (for immutability) in one commit.
 
 > **Why it matters:** With a tag-only pin, a compromised or mistakenly updated image could be pulled the next time the container restarts — without any change to your committed files. A digest pin makes the image reference cryptographically immutable. No change to the file = no different image, ever.
+
+---
+
+## Deep Dive — The Production ArgoCD Identity Stack (ESO + SSO + OpenBao)
+
+> This section is optional and does not require any additional steps from you in this lab. It documents the complete production workflow for hardening ArgoCD's authentication — replacing both the static password and local admin account with an external identity provider (IdP). Come back to this when you are setting up a real environment or want to understand the full picture.
+
+This lab stores the plaintext ArgoCD initial password in OpenBao as a convenience. In production the story is different: you control every credential, nothing is auto-generated, and local admin is eliminated entirely. The workflow below is how it is actually done when you need to deliver.
+
+---
+
+### Why This Matters
+
+The ArgoCD initial admin setup has three problems:
+
+| Problem | Risk |
+| --- | --- |
+| Auto-generated password in `argocd-initial-admin-secret` | Plain Kubernetes Secret — base64-readable by anyone with `kubectl get` |
+| Single shared `admin` account | No individual accountability — no way to know which human performed an action |
+| Local admin stays enabled | Attack surface remains even after SSO is working |
+
+The production fix: **store a bcrypt hash of the admin password in OpenBao, connect an external IdP via OIDC, and disable local admin entirely once SSO is confirmed working.**
+
+---
+
+### The Four-Phase Workflow
+
+#### Phase 1 — Seed Security (OpenBao + Hashed Password)
+
+This phase replaces the auto-generated ArgoCD password with one you control, stored properly in OpenBao.
+
+**Step 1 — Generate a strong random password:**
+
+```bash
+openssl rand -base64 32
+```
+
+> `openssl rand -base64 32` — generates 32 bytes of cryptographically secure random data and encodes it as a base64 string. Save this value securely (e.g. in a password manager) — this is the plaintext password you will use to log in.
+
+**Step 2 — Hash the password with bcrypt:**
+
+```bash
+argocd account bcrypt --password '<your-random-password>'
+```
+
+> `argocd account bcrypt` — hashes the given plaintext password using bcrypt (cost factor 10 by default). ArgoCD stores and compares bcrypt hashes internally — it never stores or receives the plaintext. The hash looks like `$2a$10$...`.
+
+**Step 3 — Store the hash and metadata in OpenBao:**
+
+```bash
+podman exec openbao-server bao kv put secret/argocd/admin-secret \
+  admin.password='$2a$10$<your-bcrypt-hash>' \
+  admin.passwordMtime="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+> `bao kv put` — writes one or more key=value pairs to a KV v2 path. `admin.password` stores the bcrypt hash (ArgoCD reads this from `argocd-secret` to verify login attempts). `admin.passwordMtime` stores an ISO 8601 timestamp — ArgoCD uses this to detect whether the password has been rotated since the last server start; without it, the new hash may be ignored.
+>
+> **Note on escaping:** Wrap the hash in single quotes — bcrypt hashes start with `$2a$` and the shell would expand `$2` as a variable otherwise.
+
+**Step 4 — Update the ExternalSecret to sync both keys into `argocd-secret`:**
+
+This replaces the ExternalSecret from Task 8. Update `externalsecret-argocd.yaml` to target `argocd-secret` (ArgoCD's real config secret) instead of the lab's `argocd-admin-secret`, and switch to the hashed keys:
+
+```yaml
+# externalsecret-argocd.yaml (replaces Task 8 version)
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argocd-admin-secret
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao
+    kind: SecretStore
+  target:
+    name: argocd-secret          # ArgoCD's own config secret — not a new secret
+    creationPolicy: Merge        # Merge into the existing secret, not replace it
+  data:
+    - secretKey: admin.password
+      remoteRef:
+        key: argocd/admin-secret
+        property: admin.password
+    - secretKey: admin.passwordMtime
+      remoteRef:
+        key: argocd/admin-secret
+        property: admin.passwordMtime
+```
+
+> `creationPolicy: Merge` — tells ESO to update fields in the existing `argocd-secret` without deleting other keys ArgoCD manages internally. Using `Owner` here would delete fields ArgoCD needs.
+
+```bash
+kubectl apply -f externalsecret-argocd.yaml
+```
+
+**Step 5 — Restart the ArgoCD API server to load the new hash:**
+
+```bash
+kubectl rollout restart deployment argocd-server -n argocd
+```
+
+> `kubectl rollout restart` — triggers a rolling restart of the deployment, replacing pods one at a time with zero downtime. ArgoCD reads `argocd-secret` at startup — the restart forces it to pick up the new bcrypt hash synced by ESO.
+
+Wait for the rollout to finish:
+
+```bash
+kubectl rollout status deployment argocd-server -n argocd
+```
+
+**Step 6 — Verify login with the new password:**
+
+```bash
+argocd login localhost:8080 --username admin --password '<your-random-password>' --insecure
+```
+
+> `argocd login` — authenticates against the ArgoCD API server and stores a session token in `~/.argocd/config`. `--insecure` skips TLS verification on the self-signed cert. If login succeeds, your bcrypt hash is working correctly.
+
+---
+
+#### Phase 2 — Identity Setup (Register with an External IdP)
+
+This phase connects ArgoCD to an external identity provider. Your users log in with their corporate/GitHub/Okta accounts — no shared ArgoCD-local accounts.
+
+> **IdP options:** Any OIDC-compliant provider works — Okta, GitHub (via GitHub OAuth Apps), Google, Keycloak, Azure AD, Dex (bundled with ArgoCD). The steps below are generic OIDC — adapt the specific URLs and field names to your chosen provider.
+
+**Step 1 — Register ArgoCD as an OIDC application in your IdP:**
+
+In your IdP's admin console, create a new "application" or "OAuth2 client":
+
+| Field | Value |
+| --- | --- |
+| Application type | Web / OIDC |
+| Redirect URI | `https://<your-argocd-hostname>/auth/callback` |
+| Grant type | Authorization Code |
+| Groups claim | Enable — so group membership is sent in the ID token |
+
+After saving, the IdP gives you a **Client ID** and **Client Secret**.
+
+**Step 2 — Store the OIDC client secret in OpenBao:**
+
+```bash
+podman exec openbao-server bao kv patch secret/argocd/admin-secret \
+  oidc.clientSecret="<client-secret-from-idp>"
+```
+
+> `bao kv patch` — adds or updates a single key in an existing KV v2 secret without overwriting other keys. Use `patch` instead of `put` here so you do not accidentally erase `admin.password`.
+
+**Step 3 — Update the ExternalSecret to also sync the OIDC secret:**
+
+Add a third entry to the `data` list in `externalsecret-argocd.yaml`:
+
+```yaml
+    - secretKey: oidc.clientSecret
+      remoteRef:
+        key: argocd/admin-secret
+        property: oidc.clientSecret
+```
+
+Apply:
+
+```bash
+kubectl apply -f externalsecret-argocd.yaml
+```
+
+ESO will sync the new key into `argocd-secret` within the `refreshInterval`.
+
+---
+
+#### Phase 3 — Integration (ArgoCD OIDC Config)
+
+This phase wires ArgoCD to your IdP using the credentials now in `argocd-secret`.
+
+**Step 1 — Configure OIDC in `argocd-cm`:**
+
+```bash
+kubectl edit configmap argocd-cm -n argocd
+```
+
+Add under `data`:
+
+```yaml
+data:
+  url: "https://<your-argocd-hostname>"
+  oidc.config: |
+    name: <Your IdP Name>
+    issuer: https://<your-idp-issuer-url>
+    clientID: <client-id-from-idp>
+    clientSecret: $oidc.clientSecret   # references the key in argocd-secret
+    requestedScopes:
+      - openid
+      - profile
+      - email
+      - groups
+    requestedIDTokenClaims:
+      groups:
+        essential: true
+```
+
+> `clientSecret: $oidc.clientSecret` — ArgoCD interpolates this at runtime by reading the key `oidc.clientSecret` from the `argocd-secret` Kubernetes Secret. The dollar-sign prefix is ArgoCD's convention for secret references inside ConfigMaps — the plaintext secret never appears in the ConfigMap itself.
+
+**Step 2 — Map IdP groups to ArgoCD roles in `argocd-rbac-cm`:**
+
+```bash
+kubectl edit configmap argocd-rbac-cm -n argocd
+```
+
+```yaml
+data:
+  policy.csv: |
+    g, <your-idp-group-name>, role:admin
+  policy.default: role:readonly
+```
+
+> `g, <group>, role:admin` — grants every member of the named IdP group the `role:admin` policy in ArgoCD. Replace `<your-idp-group-name>` with the group name exactly as your IdP sends it in the `groups` claim. `policy.default: role:readonly` means any authenticated user without an explicit mapping gets read-only access — not zero access, not admin.
+
+**Step 3 — Restart the ArgoCD API server:**
+
+```bash
+kubectl rollout restart deployment argocd-server -n argocd
+kubectl rollout status deployment argocd-server -n argocd
+```
+
+---
+
+#### Phase 4 — Hardening (Lock Down and Clean Up)
+
+Only run this phase **after** you have verified SSO login works and your group has admin access.
+
+**Step 1 — Verify SSO login:**
+
+Open `https://<your-argocd-hostname>` in a browser. You should see a "Log in via \<Your IdP Name\>" button alongside (or instead of) the username/password form. Log in with your IdP account and confirm you have admin access.
+
+**Step 2 — Disable local admin:**
+
+```bash
+kubectl edit configmap argocd-cm -n argocd
+```
+
+Add:
+
+```yaml
+data:
+  admin.enabled: "false"
+```
+
+> Setting `admin.enabled: "false"` disables the local `admin` account entirely. The username/password login form disappears. Only SSO login works from this point. **Do not do this before confirming SSO works** — you will lock yourself out.
+
+```bash
+kubectl rollout restart deployment argocd-server -n argocd
+```
+
+**Step 3 — Delete the initial admin secret:**
+
+```bash
+kubectl delete secret argocd-initial-admin-secret -n argocd
+```
+
+> `argocd-initial-admin-secret` is the auto-generated secret from ArgoCD's first install. It contained the default random password. At this point your password is managed by OpenBao + ESO and local admin is disabled — this secret is dead weight. Deleting it removes the last trace of the auto-generated credential from the cluster.
+
+---
+
+### The Full Data Flow
+
+```mermaid
+graph TD
+    idp["Identity Provider\n(Okta / GitHub / Keycloak)"] -- "OIDC login\n(JWT with groups claim)" --> argo["ArgoCD API Server"]
+    openbao["OpenBao\n(source of truth)"] -- "bcrypt hash\nOIDC client secret" --> eso["ESO"]
+    eso -- "syncs into" --> secret["argocd-secret\n(K8s Secret)"]
+    secret -- "read at startup" --> argo
+    argo -- "resolves $oidc.clientSecret\nfrom argocd-secret" --> idp
+    argo -- "checks groups claim\nagainst argocd-rbac-cm" --> rbac["RBAC decision\n(admin / readonly / denied)"]
+```
+
+---
+
+### Why OpenBao Stores Secrets Here — and What "Secure" Really Means
+
+In this lab, OpenBao runs on your workstation inside a rootless Podman container — the same machine as Minikube. For the lab this is fine: the goal is to understand the system, not to satisfy a security audit.
+
+In a production deployment, the separation matters:
+
+| Concern | Lab setup | Production setup |
+| --- | --- | --- |
+| OpenBao location | Same machine as cluster | Separate hardened node or managed service (HCP Vault, AWS Secrets Manager) |
+| OpenBao TLS cert | Self-signed, local CA | Issued by a trusted internal CA (cert-manager) |
+| ESO auth to OpenBao | Static token in a K8s Secret | Kubernetes auth method — ESO authenticates with its pod service account JWT |
+| Unseal | Manual (dev only) | Auto-unseal via AWS KMS / GCP KMS / Azure Key Vault |
+| Audit log | Local file | Forwarded to a SIEM (Splunk, Datadog) |
+| Secret rotation | Manual `bao kv put` | OpenBao rotation policies + ESO `refreshInterval` |
+
+> The architecture in this lab is correct — the data flow, the concepts, and the tools are exactly what production uses. Only the operational hardening (auto-unseal, PKI, Kubernetes auth) is deferred. That is intentional: learn the flow first, harden second.
+
+---
+
+### Quick-Reference Checklist
+
+Use this checklist when setting up ArgoCD identity from scratch or migrating an existing installation:
+
+**Fresh install (ArgoCD not yet deployed):**
+
+- [ ] Install ArgoCD (`kubectl apply`)
+- [ ] Do **not** use the initial admin secret — skip straight to Phase 1
+- [ ] Run Phase 1 → Phase 2 → Phase 3 → Phase 4 in order
+
+**Existing install (migrating from initial password):**
+
+- [ ] Run Phase 1 (replace the password hash with one from OpenBao)
+- [ ] Verify login with the new password before continuing
+- [ ] Run Phase 2 + Phase 3 (connect IdP)
+- [ ] Verify SSO login before continuing
+- [ ] Run Phase 4 (disable local admin, delete initial secret)
 
 ---
 
