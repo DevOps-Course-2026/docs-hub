@@ -387,7 +387,7 @@ active
 podman exec openbao-server bao status
 ```
 
-#### Expected Output
+#### Expected Output — Seal Status
 
 ```text
 Key                Value
@@ -411,7 +411,7 @@ sleep 2
 systemctl --user is-active openbao.service
 ```
 
-#### Expected Output
+#### Expected Output — Auto-Recovery
 
 ```text
 active
