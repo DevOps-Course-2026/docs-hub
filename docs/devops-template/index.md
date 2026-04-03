@@ -63,7 +63,7 @@ The portal ([docs-hub](https://DevOps-Course-2026.github.io/docs-hub/)) is a sha
 
 **Recommended structure for `docs/`:**
 
-```
+```text
 docs/
   index.md               ← optional: overrides README.md as landing page
   _category_.json        ← optional: sets the sidebar label for this section
