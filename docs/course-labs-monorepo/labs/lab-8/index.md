@@ -397,6 +397,185 @@ The gold standard is the last approach: keep secrets entirely outside the cluste
 
 ---
 
+## Task 4 — Deploy a Helm Chart with ArgoCD (Multi-Environment GitOps)
+
+With ArgoCD running and accessible, we now give it something to deploy. This task introduces the core GitOps loop: a Git repo is the source of truth, ArgoCD watches it, and the cluster converges to match it — for two environments simultaneously.
+
+### What You Are Building
+
+A Helm chart monorepo (`helm-gitops-demo`) holds a default nginx chart with environment-specific values files. Two branches represent two environments:
+
+| Branch | Values file | Replicas | Environment |
+| --- | --- | --- | --- |
+| `main` | `values-prod.yaml` | 3 | Production |
+| `dev` | `values-dev.yaml` | 1 | Development |
+
+ArgoCD will deploy both as separate Applications, each watching its own branch. Any push to either branch triggers a sync.
+
+---
+
+### Step 1 — Clone the Helm Chart Repo
+
+```bash
+git clone https://github.com/DevOps-Course-2026/helm-gitops-demo.git
+cd helm-gitops-demo
+```
+
+### Step 2 — Understand the Chart Structure
+
+The chart was generated with `helm create myapp` — the default Helm scaffold — and uses nginx as the application image.
+
+```text
+charts/myapp/
+  Chart.yaml          ← chart metadata (name, version, appVersion)
+  values.yaml         ← default values
+  values-dev.yaml     ← dev overrides (1 replica)
+  values-prod.yaml    ← prod overrides (3 replicas)
+  templates/          ← Kubernetes manifest templates
+```
+
+Inspect the environment overrides:
+
+```bash
+cat charts/myapp/values-dev.yaml
+```
+
+```yaml
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: "1.25"
+
+service:
+  type: ClusterIP
+  port: 80
+```
+
+```bash
+cat charts/myapp/values-prod.yaml
+```
+
+```yaml
+replicaCount: 3
+
+image:
+  repository: nginx
+  tag: "1.25"
+
+service:
+  type: ClusterIP
+  port: 80
+```
+
+The only difference is `replicaCount` — 1 for dev, 3 for prod. This is the simplest expression of environment promotion via values files.
+
+### Step 3 — Create and Push the `dev` Branch
+
+```bash
+git checkout -b dev
+git push origin dev
+```
+
+The repo now has two long-lived branches. ArgoCD will target each independently.
+
+---
+
+### Step 4 — Create the ArgoCD Applications
+
+In the ArgoCD UI (from Task 3), create two Applications — one per environment.
+
+#### Application 1 — Production (tracks `main`)
+
+Click **New App** and fill in:
+
+| Field | Value |
+| --- | --- |
+| Application Name | `myapp-prod` |
+| Project | `default` |
+| Sync Policy | `Automatic` |
+| Repository URL | `https://github.com/DevOps-Course-2026/helm-gitops-demo` |
+| Revision | `main` |
+| Path | `charts/myapp` |
+| Cluster | `https://kubernetes.default.svc` |
+| Namespace | `myapp-prod` |
+| Helm Values Files | `values-prod.yaml` |
+
+#### Application 2 — Development (tracks `dev`)
+
+| Field | Value |
+| --- | --- |
+| Application Name | `myapp-dev` |
+| Project | `default` |
+| Sync Policy | `Automatic` |
+| Repository URL | `https://github.com/DevOps-Course-2026/helm-gitops-demo` |
+| Revision | `dev` |
+| Path | `charts/myapp` |
+| Cluster | `https://kubernetes.default.svc` |
+| Namespace | `myapp-dev` |
+| Helm Values Files | `values-dev.yaml` |
+
+> **Namespace pre-creation:** ArgoCD does not create namespaces by default. Either enable **Auto-Create Namespace** in the app settings, or create them manually:
+
+```bash
+kubectl create namespace myapp-prod
+kubectl create namespace myapp-dev
+```
+
+---
+
+### Step 5 — Verify Both Environments
+
+Check that ArgoCD deployed the correct replica count for each environment:
+
+```bash
+kubectl get deployments -n myapp-prod
+kubectl get deployments -n myapp-dev
+```
+
+#### Expected Output
+
+```text
+# myapp-prod
+NAME    READY   UP-TO-DATE   AVAILABLE
+myapp   3/3     3            3
+
+# myapp-dev
+NAME    READY   UP-TO-DATE   AVAILABLE
+myapp   1/1     1            1
+```
+
+---
+
+### Step 6 — Observe the GitOps Loop
+
+Make a change on the `dev` branch and push it:
+
+```bash
+git checkout dev
+# Edit charts/myapp/values-dev.yaml — change replicaCount to 2
+git add charts/myapp/values-dev.yaml
+git commit -m "chore(dev): scale dev to 2 replicas"
+git push origin dev
+```
+
+Within the `refreshInterval` (default 3 minutes, or immediately if you click **Sync** in the UI), ArgoCD will detect the change and scale the `myapp-dev` deployment to 2 replicas — without any `kubectl` command.
+
+`myapp-prod` on `main` is unaffected.
+
+---
+
+### Summary
+
+| What happened | Why it matters |
+| --- | --- |
+| One repo, two branches | Branches model environments — not separate repos |
+| Values files per environment | Configuration is explicit, version-controlled, and reviewable |
+| ArgoCD tracks each branch | Pushes to `dev` affect only `myapp-dev`, pushes to `main` affect only `myapp-prod` |
+| No `kubectl apply` | The cluster is driven entirely by Git state — the GitOps principle |
+
+---
+
 ## Deep Dive — How `kubectl port-forward` Works
 
 > This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
