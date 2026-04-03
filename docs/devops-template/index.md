@@ -47,3 +47,47 @@ Full documentation is available on the
 Docs in `docs/` sync automatically to the portal on every push to `main`.
 Root `README.md` becomes the portal landing page. Root `CONTRIBUTING.md`
 and other `.md` files sync as additional pages.
+
+### Portal Docs Structure
+
+**What are portal docs?**
+The portal ([docs-hub](https://DevOps-Course-2026.github.io/docs-hub/)) is a shared Docusaurus site that aggregates documentation from every repo in the organization. Each repo gets its own section in the portal sidebar.
+
+**How the sync works:**
+
+| Source in this repo | Becomes in the portal |
+| --- | --- |
+| `README.md` | Landing page for this repo's portal section (`index.md`) |
+| `docs/**/*.md` | All pages under this repo's section, preserving folder structure |
+| `CONTRIBUTING.md`, `SECURITY.md`, etc. | Additional flat pages in this repo's section |
+
+**Recommended structure for `docs/`:**
+
+```
+docs/
+  index.md               ← optional: overrides README.md as landing page
+  _category_.json        ← optional: sets the sidebar label for this section
+  guide-one.md
+  guide-two.md
+  sub-section/
+    _category_.json
+    page.md
+```
+
+Use standard [Docusaurus frontmatter](https://docusaurus.io/docs/api/plugins/@docusaurus/plugin-content-docs#markdown-frontmatter) at the top of any `.md` file to control sidebar position and label:
+
+```yaml
+---
+sidebar_position: 1
+sidebar_label: My Page
+---
+```
+
+`_category_.json` controls a folder's sidebar label and position:
+
+```json
+{
+  "label": "My Section",
+  "position": 2
+}
+```
