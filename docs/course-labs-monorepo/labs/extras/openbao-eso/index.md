@@ -994,6 +994,24 @@ This lab stores the plaintext ArgoCD initial password in OpenBao as a convenienc
 
 ---
 
+### The End-User Login Flow (What You Are Building Toward)
+
+Once this stack is fully configured, a user logging into ArgoCD never touches OpenBao, never types an ArgoCD-specific password, and never knows a static secret exists:
+
+1. User opens `https://argocd.company.com`
+2. ArgoCD shows a **"Log in via \<IdP\>"** button (e.g. "Log in via GitHub")
+3. User clicks → browser redirects to the company identity provider
+4. User logs in with their **company account** (the same credentials used for email, Slack, etc.)
+5. IdP returns a signed JWT to ArgoCD
+6. ArgoCD checks `argocd-rbac-cm` — maps the user's IdP group (e.g. `devops-team`) to an ArgoCD role (e.g. `role:admin`)
+7. User is in — no ArgoCD password was ever involved
+
+**OpenBao's role is infrastructure-only.** It was involved exactly once: ESO read the OIDC client secret and the bcrypt admin hash out of OpenBao and synced them into `argocd-secret` before any user logged in. From that point forward, OpenBao is idle — ArgoCD talks directly to the IdP.
+
+The SSO button does **not** appear until `oidc.config` is set in `argocd-cm`. Before that config exists, ArgoCD shows only the local username/password form. The four phases below walk through every step needed to get from that form to the SSO button.
+
+---
+
 ### Why This Matters
 
 The ArgoCD initial admin setup has three problems:
