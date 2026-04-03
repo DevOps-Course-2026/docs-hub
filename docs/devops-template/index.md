@@ -57,7 +57,7 @@ The portal ([docs-hub](https://DevOps-Course-2026.github.io/docs-hub/)) is a sha
 
 | Source in this repo | Becomes in the portal |
 | --- | --- |
-| `README.md` | Landing page for this repo's portal section (`index.md`) |
+| `README.md` | Landing page for this repo's portal section (`index.md`) — **do not also create `docs/index.md`** |
 | `docs/**/*.md` | All pages under this repo's section, preserving folder structure |
 | `CONTRIBUTING.md`, `SECURITY.md`, etc. | Additional flat pages in this repo's section |
 
@@ -65,7 +65,6 @@ The portal ([docs-hub](https://DevOps-Course-2026.github.io/docs-hub/)) is a sha
 
 ```text
 docs/
-  index.md               ← optional: overrides README.md as landing page
   _category_.json        ← optional: sets the sidebar label for this section
   guide-one.md
   guide-two.md
@@ -73,6 +72,8 @@ docs/
     _category_.json
     page.md
 ```
+
+> **Do not create `docs/index.md`.** The sync workflow copies `README.md` as the landing page (`index.md`). If `docs/index.md` also exists, the sync fails with a collision error.
 
 Use standard [Docusaurus frontmatter](https://docusaurus.io/docs/api/plugins/@docusaurus/plugin-content-docs#markdown-frontmatter) at the top of any `.md` file to control sidebar position and label:
 
