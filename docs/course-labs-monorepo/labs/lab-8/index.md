@@ -397,20 +397,22 @@ The gold standard is the last approach: keep secrets entirely outside the cluste
 
 ---
 
-## Task 4 — Deploy a Helm Chart with ArgoCD (Multi-Environment GitOps)
+## Task 4 — Prepare the Helm Chart Repository
 
-With ArgoCD running and accessible, we now give it something to deploy. This task introduces the core GitOps loop: a Git repo is the source of truth, ArgoCD watches it, and the cluster converges to match it — for two environments simultaneously.
+With ArgoCD running and accessible, we now prepare the repository it will deploy from. Before ArgoCD can track a repo, the repo must exist — with the right branches, values files, and chart layout.
+
+By the end of this task you will have cloned the Helm chart repo, understood its structure, and created the `dev` branch that ArgoCD will watch in the next tasks.
 
 ### What You Are Building
 
-A Helm chart monorepo (`helm-gitops-demo`) holds a default nginx chart with environment-specific values files. Two branches represent two environments:
+A Helm chart monorepo (`helm-gitops-demo`) holds an nginx chart with environment-specific values files. Two long-lived branches represent two environments:
 
 | Branch | Values file | Replicas | Environment |
 | --- | --- | --- | --- |
 | `main` | `values-prod.yaml` | 3 | Production |
 | `dev` | `values-dev.yaml` | 1 | Development |
 
-ArgoCD will deploy both as separate Applications, each watching its own branch. Any push to either branch triggers a sync.
+ArgoCD will later deploy both as separate Applications, each watching its own branch. For now, you are setting up the Git side — the source of truth.
 
 ---
 
@@ -477,130 +479,132 @@ git checkout -b dev
 git push origin dev
 ```
 
-The repo now has two long-lived branches. ArgoCD will target each independently.
-
----
-
-### Step 4 — Create the ArgoCD Applications
-
-In the ArgoCD UI (from Task 3), create two Applications — one per environment.
-
-#### Application 1 — Production (tracks `main`)
-
-Click **New App** and fill in:
-
-| Field | Value |
-| --- | --- |
-| Application Name | `myapp-prod` |
-| Project | `default` |
-| Sync Policy | `Automatic` |
-| Repository URL | `https://github.com/DevOps-Course-2026/helm-gitops-demo` |
-| Revision | `main` |
-| Path | `charts/myapp` |
-| Cluster | `https://kubernetes.default.svc` |
-| Namespace | `myapp-prod` |
-| Helm Values Files | `values-prod.yaml` |
-
-#### Application 2 — Development (tracks `dev`)
-
-| Field | Value |
-| --- | --- |
-| Application Name | `myapp-dev` |
-| Project | `default` |
-| Sync Policy | `Automatic` |
-| Repository URL | `https://github.com/DevOps-Course-2026/helm-gitops-demo` |
-| Revision | `dev` |
-| Path | `charts/myapp` |
-| Cluster | `https://kubernetes.default.svc` |
-| Namespace | `myapp-dev` |
-| Helm Values Files | `values-dev.yaml` |
-
-> **Namespace pre-creation:** ArgoCD does not create namespaces by default. Either enable **Auto-Create Namespace** in the app settings, or create them manually:
-
-```bash
-kubectl create namespace myapp-prod
-kubectl create namespace myapp-dev
-```
-
----
-
-### Step 5 — Verify Both Environments
-
-Check that ArgoCD deployed the correct replica count for each environment:
-
-```bash
-kubectl get deployments -n myapp-prod
-kubectl get deployments -n myapp-dev
-```
-
-#### Expected Output
-
-```text
-# myapp-prod
-NAME    READY   UP-TO-DATE   AVAILABLE
-myapp   3/3     3            3
-
-# myapp-dev
-NAME    READY   UP-TO-DATE   AVAILABLE
-myapp   1/1     1            1
-```
-
----
-
-### Step 6 — Observe the GitOps Loop
-
-Make a change on the `dev` branch and push it:
-
-```bash
-git checkout dev
-# Edit charts/myapp/values-dev.yaml — change replicaCount to 2
-git add charts/myapp/values-dev.yaml
-git commit -m "chore(dev): scale dev to 2 replicas"
-git push origin dev
-```
-
-Within the `refreshInterval` (default 3 minutes, or immediately if you click **Sync** in the UI), ArgoCD will detect the change and scale the `myapp-dev` deployment to 2 replicas — without any `kubectl` command.
-
-`myapp-prod` on `main` is unaffected.
+The repo now has two long-lived branches. ArgoCD will target each independently in the next tasks.
 
 ---
 
 ### Summary
 
-| What happened | Why it matters |
+| What | Why |
 | --- | --- |
-| One repo, two branches | Branches model environments — not separate repos |
-| Values files per environment | Configuration is explicit, version-controlled, and reviewable |
-| ArgoCD tracks each branch | Pushes to `dev` affect only `myapp-dev`, pushes to `main` affect only `myapp-prod` |
-| No `kubectl apply` | The cluster is driven entirely by Git state — the GitOps principle |
+| Cloned `helm-gitops-demo` | The Git source of truth for both environments |
+| Reviewed chart structure | Values files control environment-specific config — no separate repos needed |
+| Created and pushed `dev` branch | ArgoCD tracks branches per environment — `dev` for development, `main` for production |
+
+The repository is ready. In the next task, you will register it with ArgoCD so it can start pulling from it.
 
 ---
 
-## Task 5 — Add a Git Repository to ArgoCD
+## Task 5 — Connect GitHub to ArgoCD
 
-Before ArgoCD can deploy from a repository, it must be registered. For public repositories ArgoCD can pull anonymously — no credentials required. For private repositories, credentials must be stored and associated with the URL.
+### How the Pieces Fit Together
 
-In Task 4 you created Applications that pointed at `helm-gitops-demo`. ArgoCD registered the repo implicitly the first time it synced. This task makes the process explicit — you will register it manually via the CLI, understand what ArgoCD stores internally, and see how the private case differs.
+Before diving into steps, it helps to understand the full picture — from a Helm chart in Git all the way to running pods in the cluster.
 
-### Step 1 — Register the Repo via the CLI
+#### The Full Stack
 
-Log in to ArgoCD first (from Task 3):
+| Layer | What it is | Example in this lab |
+| --- | --- | --- |
+| **Helm chart** | A template for Kubernetes manifests — parameterised with `values.yaml` | `charts/myapp/` in `helm-gitops-demo` |
+| **Values file** | Overrides for a specific environment — replicas, image tag, resource limits | `values-dev.yaml`, `values-prod.yaml` |
+| **Git repository** | Holds the chart and all values files. The source of truth | `helm-gitops-demo` on GitHub |
+| **Repository registration** | A record in ArgoCD: "this Git URL exists, here is how to reach it" | Stored as a Kubernetes Secret in `argocd` namespace |
+| **ArgoCD Application** | Tells ArgoCD: "watch *this repo*, at *this branch*, render *this chart* with *this values file*, deploy into *this namespace*" | `myapp-dev`, `myapp-prod` |
+| **Kubernetes Deployment** | The actual running workload — created and kept in sync by ArgoCD | `myapp` pods in `myapp-dev` / `myapp-prod` |
 
-```bash
-argocd login localhost:8080 --username admin --password <password> --insecure
+#### How They Connect
+
+```text
+Helm chart + values file
+        ↓  (rendered by ArgoCD repo-server)
+Kubernetes manifests (Deployment, Service, Ingress…)
+        ↓  (applied by ArgoCD application-controller)
+Live Kubernetes resources
 ```
 
-Then add the repository:
+ArgoCD's job is to continuously compare what is in Git (the chart rendered with the values file) against what is live in the cluster, and reconcile any drift.
+
+Each **ArgoCD Application** is the glue — it binds one branch of the repo, one path (the chart), and one values file override to one target namespace:
+
+```text
+helm-gitops-demo (repo)
+  ├── branch: main  →  Application: myapp-prod  →  values-prod.yaml  →  namespace: myapp-prod  →  3 replicas
+  └── branch: dev   →  Application: myapp-dev   →  values-dev.yaml   →  namespace: myapp-dev   →  1 replica
+```
+
+This is why you need **two Applications for two environments** — not two repos, not two charts. One chart, two values files, two branches, two Applications.
+
+#### ArgoCD Application = Helm Release (managed by ArgoCD)
+
+If you have used Helm directly before, an ArgoCD Application is conceptually the same thing as a **Helm release** — it is one instantiation of a chart with a specific set of values, deployed into a specific namespace.
+
+The difference is **who manages the lifecycle**:
+
+| | Plain Helm | ArgoCD Application |
+| --- | --- | --- |
+| Renders the chart | `helm install` / `helm upgrade` | ArgoCD repo-server (calls Helm internally) |
+| Applies manifests to cluster | Helm | ArgoCD application-controller |
+| Tracks desired state | Helm release Secret in cluster | Git (the branch/path in the Application spec) |
+| Detects drift | Manual (`helm diff`) | Continuous — ArgoCD reconciles every 3 minutes |
+| Rolls back | `helm rollback` | Revert the Git commit — ArgoCD syncs automatically |
+
+When you create an ArgoCD Application pointing at a Helm chart, ArgoCD runs `helm template` under the hood to render the manifests, then applies them itself. Helm's own release tracking (`helm list`, `helm history`) is **not** used — ArgoCD replaces that layer entirely.
+
+#### The Dependency Chain
+
+```text
+Git Repository → (registered in ArgoCD) → ArgoCD Application → Kubernetes Deployment
+```
+
+ArgoCD cannot create an Application pointing at a repo it has never seen. It needs to know the repo exists and how to reach it first. That is what "registering" means — telling ArgoCD about a Git URL before you ask it to deploy from it.
+
+For **public repositories**, registration is purely about discoverability — no credentials needed, anonymous HTTPS is sufficient. For **private repositories**, registration is also where you supply credentials (token or SSH key), which ArgoCD stores in a Kubernetes Secret and reuses on every sync.
+
+### Explicit vs Implicit Registration
+
+ArgoCD can register a repo in two ways:
+
+- **Implicitly** — when you create an Application pointing at a URL, ArgoCD registers the repo automatically the first time it syncs. This is convenient but skips any upfront connectivity check.
+- **Explicitly** — you register the repo first via the CLI or UI, verify the connection status is `Successful`, and *then* create Applications against it. This is better for catching problems (wrong URL, missing credentials, network issues) before any deployment is attempted.
+
+In this task you register explicitly.
+
+---
+
+### Step 1 — Install the ArgoCD CLI
+
+> **Installation:** Follow the official guide at [argo-cd.readthedocs.io/en/stable/cli_installation](https://argo-cd.readthedocs.io/en/stable/cli_installation/) to install the `argocd` binary for your OS.
+
+---
+
+### Step 2 — Log In to ArgoCD
 
 ```bash
-argocd repo add https://github.com/DevOps-Course-2026/helm-gitops-demo \
-  --name helm-gitops-demo
+argocd login localhost:8080 --username admin --password <password>
 ```
 
 #### Expected Output
 
 ```text
-Repository 'https://github.com/DevOps-Course-2026/helm-gitops-demo' added
+WARNING: server certificate had error: error creating connection: tls: failed to verify certificate: x509: certificate signed by unknown authority. Proceed insecurely (y/n)? y
+'admin:login' logged in successfully
+Context 'localhost:8080' updated
+```
+
+The CLI warns about the self-signed certificate — this is expected. Enter `y` to proceed.
+
+---
+
+### Step 3 — Register the Repository
+
+```bash
+argocd repo add https://github.com/DevOps-Course-2026/helm-gitops-demo.git
+```
+
+#### Expected Output
+
+```text
+Repository 'https://github.com/DevOps-Course-2026/helm-gitops-demo.git' added
 ```
 
 Verify it is registered:
@@ -610,15 +614,25 @@ argocd repo list
 ```
 
 ```text
-TYPE  NAME              REPO                                                           INSECURE  OCI    LFS    CREDS  STATUS      MESSAGE
-git   helm-gitops-demo  https://github.com/DevOps-Course-2026/helm-gitops-demo         false     false  false  false  Successful
+TYPE  NAME  REPO                                                               INSECURE  OCI    LFS    CREDS  STATUS      MESSAGE
+git         https://github.com/DevOps-Course-2026/helm-gitops-demo.git         false     false  false  false  Successful
 ```
 
-`CREDS: false` confirms anonymous access — no credentials stored.
+| Column | Meaning |
+| --- | --- |
+| `TYPE` | Protocol — `git` (standard Git over HTTPS or SSH) or `helm` (Helm registry) |
+| `NAME` | Optional friendly name given to the repo — blank if `--name` was not used |
+| `REPO` | The URL ArgoCD uses to clone/fetch from |
+| `INSECURE` | `true` if TLS verification is disabled for this repo (e.g., self-signed cert on the Git server itself — different from the ArgoCD UI cert issue) |
+| `OCI` | `true` if this is an OCI-based Helm registry (images stored in a container registry instead of a standard Helm repo) |
+| `LFS` | `true` if Git LFS (Large File Storage) is enabled — used when the repo stores large binary assets via LFS pointers |
+| `CREDS` | `true` if credentials (token or SSH key) are stored for this repo — `false` means anonymous access |
+| `STATUS` | `Successful` = ArgoCD verified it can reach and clone the repo. `Failed` = connectivity or auth problem |
+| `MESSAGE` | Empty on success; contains the error message if `STATUS` is `Failed` |
 
 ---
 
-### Step 2 — UI Equivalent
+### Step 4 — UI Equivalent
 
 In the ArgoCD UI: **Settings → Repositories → Connect Repo**.
 
@@ -648,19 +662,29 @@ argocd repo add git@github.com:your-org/private-repo \
   --ssh-private-key-path ~/.ssh/id_rsa
 ```
 
-ArgoCD stores the credentials in a Kubernetes Secret (type `Opaque`) in the `argocd` namespace:
+ArgoCD stores the credentials in a Kubernetes Secret in the `argocd` namespace:
 
 ```bash
 kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
 ```
 
-The secret contains the URL, username, and password (or SSH key) — encrypted at rest by etcd. This is why the credentials only need to be supplied once.
+The secret contains the URL, username, and password (or SSH key) — base64-encoded in etcd. The credentials only need to be supplied once.
 
-> **Production Note:** Instead of personal tokens, production teams use a **GitHub App** or a **deploy key** scoped to exactly the repositories ArgoCD needs. This limits blast radius if the credentials are ever rotated or leaked.
+> **Production Note:** Instead of personal tokens, production teams use a **GitHub App** or a **deploy key** scoped to exactly the repositories ArgoCD needs. This limits blast radius if credentials are ever rotated or leaked.
 
 ---
 
 ### Deep Dive — What Happens Internally When You Add a Repo
+
+#### What is gRPC?
+
+**gRPC** (Google Remote Procedure Call) is a protocol for calling functions on a remote server as if they were local functions. Instead of sending HTTP requests with JSON bodies, the caller says "run this function with these arguments" — the framework handles serialisation, transport, and response parsing.
+
+ArgoCD uses gRPC for all communication between the CLI, the server, and internal components. It runs over HTTP/2, which allows multiple calls to share a single TCP connection and supports bidirectional streaming (used for features like `argocd app logs`).
+
+REST APIs use URLs and HTTP verbs (`GET /repos`, `POST /repos`). gRPC uses service definitions (`RepoService.Create`, `RepoService.List`) — the same idea, different wire format.
+
+---
 
 When you run `argocd repo add`, the flow is:
 
@@ -694,6 +718,77 @@ sequenceDiagram
 ```
 
 The separation between `argocd-server` (API) and `argocd-repo-server` (Git operations) means that credentials are only ever used by `argocd-repo-server`, which has no public-facing port. Even if `argocd-server` were compromised, an attacker could not directly use stored credentials — they would have to pivot through `argocd-repo-server` inside the cluster.
+
+#### Polling vs Webhooks
+
+By default, ArgoCD discovers changes through **polling** — `argocd-repo-server` runs `git fetch` on a fixed interval (3 minutes by default). Every registered repository is checked on that schedule, regardless of whether anything changed.
+
+**Webhooks** invert the model: instead of ArgoCD asking "did anything change?", GitHub tells ArgoCD "something just changed" the moment a `git push` lands. ArgoCD refreshes only the affected repository immediately, cutting the delay from up to 3 minutes to seconds.
+
+| | Polling | Webhook |
+| --- | --- | --- |
+| **Direction** | ArgoCD pulls from GitHub | GitHub pushes to ArgoCD |
+| **Lag after `git push`** | Up to 3 minutes | Seconds |
+| **Setup** | Zero — works out of the box | Requires a public ArgoCD endpoint + webhook config |
+| **Works in local / Minikube** | Yes | No — GitHub cannot reach `localhost` |
+| **Scalability** | Every repo polled on the same schedule | Only triggered repos refresh |
+
+For local development with Minikube, polling is fine. In production, webhooks are strongly recommended.
+
+##### Enabling Webhooks in Production
+
+Two parts: configure GitHub to send the event, and configure ArgoCD to verify it.
+
+**1. Add a webhook on GitHub** — in your repository under **Settings → Webhooks → Add webhook**:
+
+| Field | Value |
+| --- | --- |
+| Payload URL | `https://<argocd-hostname>/api/webhook` |
+| Content type | `application/json` |
+| Secret | A random string — e.g., `openssl rand -hex 20` |
+| Events | Just the push event |
+
+**2. Store the secret in ArgoCD** so it can verify the HMAC signature GitHub attaches to every payload:
+
+```bash
+kubectl patch secret argocd-secret -n argocd \
+  --type='json' \
+  -p='[{"op":"add","path":"/data/webhook.github.secret","value":"'$(echo -n "<your-secret>" | base64)'"}]'
+```
+
+Requests without a valid signature are rejected, preventing spoofed pushes from triggering syncs.
+
+> **Note:** The webhook only accelerates *detection* of changes. ArgoCD still goes through its normal sync flow — Helm render, diff, apply. If auto-sync is disabled, the webhook triggers a refresh (ArgoCD knows a new commit exists) but waits for manual sync approval before touching the cluster.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant GitHub
+    participant Server as argocd-server
+    participant Repo as argocd-repo-server
+
+    Dev->>GitHub: git push
+    GitHub->>Server: POST /api/webhook (HMAC signed)
+    Server->>Server: Verify HMAC signature
+    Server->>Repo: Refresh repository (git fetch)
+    Repo->>GitHub: git fetch
+    GitHub-->>Repo: Updated refs + new commit SHA
+    Repo->>Server: New revision available
+    Note over Server: If auto-sync enabled → trigger sync immediately
+```
+
+---
+
+### Summary
+
+| Step | What happened | Why it matters |
+| --- | --- | --- |
+| Install CLI | Installed `argocd` locally | Needed to interact with the ArgoCD API from your terminal |
+| `argocd login` | Authenticated; accepted self-signed cert interactively | Credentials stored in `~/.config/argocd/config` for subsequent commands |
+| `argocd repo add` | Registered the public repo | ArgoCD can now pull Helm charts from `helm-gitops-demo` |
+| `CREDS: false` | No credentials stored | The repo is public — anonymous HTTPS is sufficient |
+
+In the next task, you will create the first ArgoCD Application and point it at the `dev` branch.
 
 ---
 
