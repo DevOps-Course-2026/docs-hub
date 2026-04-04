@@ -576,6 +576,127 @@ Within the `refreshInterval` (default 3 minutes, or immediately if you click **S
 
 ---
 
+## Task 5 — Add a Git Repository to ArgoCD
+
+Before ArgoCD can deploy from a repository, it must be registered. For public repositories ArgoCD can pull anonymously — no credentials required. For private repositories, credentials must be stored and associated with the URL.
+
+In Task 4 you created Applications that pointed at `helm-gitops-demo`. ArgoCD registered the repo implicitly the first time it synced. This task makes the process explicit — you will register it manually via the CLI, understand what ArgoCD stores internally, and see how the private case differs.
+
+### Step 1 — Register the Repo via the CLI
+
+Log in to ArgoCD first (from Task 3):
+
+```bash
+argocd login localhost:8080 --username admin --password <password> --insecure
+```
+
+Then add the repository:
+
+```bash
+argocd repo add https://github.com/DevOps-Course-2026/helm-gitops-demo \
+  --name helm-gitops-demo
+```
+
+#### Expected Output
+
+```text
+Repository 'https://github.com/DevOps-Course-2026/helm-gitops-demo' added
+```
+
+Verify it is registered:
+
+```bash
+argocd repo list
+```
+
+```text
+TYPE  NAME              REPO                                                           INSECURE  OCI    LFS    CREDS  STATUS      MESSAGE
+git   helm-gitops-demo  https://github.com/DevOps-Course-2026/helm-gitops-demo         false     false  false  false  Successful
+```
+
+`CREDS: false` confirms anonymous access — no credentials stored.
+
+---
+
+### Step 2 — UI Equivalent
+
+In the ArgoCD UI: **Settings → Repositories → Connect Repo**.
+
+| Field | Value |
+| --- | --- |
+| Connection method | `HTTPS` |
+| Repository URL | `https://github.com/DevOps-Course-2026/helm-gitops-demo` |
+| Username | *(leave blank)* |
+| Password | *(leave blank)* |
+
+Click **Connect**. The result is identical to the CLI command above.
+
+---
+
+### Private Repository — How It Differs
+
+For a private repository you must supply credentials. The only change is adding flags to the CLI command (or filling in the credentials fields in the UI):
+
+```bash
+# Using a GitHub Personal Access Token
+argocd repo add https://github.com/your-org/private-repo \
+  --username git \
+  --password <github-pat>
+
+# Using an SSH key
+argocd repo add git@github.com:your-org/private-repo \
+  --ssh-private-key-path ~/.ssh/id_rsa
+```
+
+ArgoCD stores the credentials in a Kubernetes Secret (type `Opaque`) in the `argocd` namespace:
+
+```bash
+kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
+```
+
+The secret contains the URL, username, and password (or SSH key) — encrypted at rest by etcd. This is why the credentials only need to be supplied once.
+
+> **Production Note:** Instead of personal tokens, production teams use a **GitHub App** or a **deploy key** scoped to exactly the repositories ArgoCD needs. This limits blast radius if the credentials are ever rotated or leaked.
+
+---
+
+### Deep Dive — What Happens Internally When You Add a Repo
+
+When you run `argocd repo add`, the flow is:
+
+1. The ArgoCD CLI sends a gRPC request to `argocd-server`
+2. `argocd-server` writes a Kubernetes Secret to the `argocd` namespace with:
+   - `argocd.argoproj.io/secret-type: repository` label
+   - The URL, connection type (https/ssh), and any credentials
+3. `argocd-repo-server` — a separate pod — picks up the new repository
+4. `argocd-repo-server` performs an initial **`git ls-remote`** to verify connectivity and resolve the default branch
+5. The result is stored as the repository's connection status (`Successful` or `Failed`)
+
+From that point on, `argocd-repo-server` is the only component that touches Git. It runs `git fetch` on a schedule (every 3 minutes by default) and caches the result. `argocd-application-controller` reads the cached manifests and compares them to the live cluster state — it never talks to Git directly.
+
+```mermaid
+sequenceDiagram
+    participant CLI as argocd CLI
+    participant Server as argocd-server
+    participant K8s as Kubernetes API
+    participant Repo as argocd-repo-server
+    participant Git as GitHub
+
+    CLI->>Server: gRPC RepoService.Create (url, creds)
+    Server->>K8s: Create Secret (type=repository)
+    K8s-->>Server: Secret created
+    Repo->>K8s: Watch Secrets (label selector)
+    K8s-->>Repo: New secret event
+    Repo->>Git: git ls-remote (verify connectivity)
+    Git-->>Repo: refs list
+    Repo->>K8s: Update Secret status → Successful
+    Server-->>CLI: Repository added
+```
+
+The separation between `argocd-server` (API) and `argocd-repo-server` (Git operations) means that credentials are only ever used by `argocd-repo-server`, which has no public-facing port. Even if `argocd-server` were compromised, an attacker could not directly use stored credentials — they would have to pivot through `argocd-repo-server` inside the cluster.
+
+---
+
 ## Deep Dive — How `kubectl port-forward` Works
 
 > This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
