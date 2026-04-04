@@ -28,7 +28,7 @@ helm-gitops-demo/
 
 | Chart | Description |
 | --- | --- |
-| _(charts will be listed here as they are added)_ | |
+| `myapp` | Generic nginx-based app chart used in Lab 8 GitOps exercises |
 
 ## Using the Helm Registry
 
