@@ -1114,6 +1114,45 @@ Three pods — matching `replicaCount: 3` from `values-prod.yaml`.
 
 ---
 
+## Before We Continue — Clean Git State
+
+Before moving on, ensure all changes are committed and pushed:
+
+- Committed `argocd/dev-app.yaml` and `argocd/prod-app.yaml` on the `dev` branch and pushed to `origin/dev`
+- Opened a Pull Request from `dev` → `main` and merged it
+
+Both branches are now in sync. Your cluster is reconciled against `main` (prod) and `dev` (dev) respectively, with no pending local changes.
+
+---
+
+## How It All Fits Together
+
+Before running Task 8, it helps to see the full picture of what you have built and what is about to happen.
+
+### What you built
+
+| Step | What | Detail |
+| --- | --- | --- |
+| 1 | Helm chart | `charts/myapp/` — a standalone, re-usable chart. You never ran `helm install` yourself. |
+| 2 | Installed ArgoCD | ArgoCD is the "installer". It replaces `helm install` for everything after this point. |
+| 3 | Registered the repo | ArgoCD now has read access to `helm-gitops-demo` and can pull commits from it. |
+| 4 | Applied Application manifests | `dev-app.yaml` and `prod-app.yaml` told ArgoCD *what branch*, *what path*, and *what values file* to use. ArgoCD rendered the chart and deployed both environments. The cluster state now matches git. |
+
+### What is about to happen (Task 8)
+
+| Step | Actor | What happens |
+| --- | --- | --- |
+| 5 | You | Edit `charts/myapp/values-dev.yaml` — change `replicaCount` from `1` to `2` — and push to `dev` |
+| 6 | ArgoCD | Polls the `dev` branch every ~3 minutes. Detects the new commit. Re-renders the chart with the updated values. Computes the diff: 1 → 2 replicas. |
+| 7 | ArgoCD | Applies the diff to the cluster. Kubernetes scales the Deployment from 1 pod to 2 pods. |
+| 8 | You | Run `kubectl get pods -n myapp-dev` and see 2 pods running — without ever touching `kubectl` or `helm`. |
+
+:::tip The GitOps principle
+The cluster never diverges from git. You do not push to the cluster; you push to the repository. ArgoCD bridges the gap. This is the core value of GitOps.
+:::
+
+---
+
 ## Deep Dive — How `kubectl port-forward` Works
 
 > This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
