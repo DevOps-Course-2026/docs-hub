@@ -1246,6 +1246,35 @@ This is the GitOps loop in action: **git is the source of truth, the cluster fol
 
 ---
 
+## A Word on Git — Keeping Branches in Sync
+
+After every PR merge from `dev` → `main`, your local `dev` branch is behind `main` by one merge commit. Best practice is to rebase `dev` onto `main` immediately after merging, so your next cycle starts from a clean base:
+
+```bash
+git checkout dev
+git pull origin main --rebase
+git push origin dev --force-with-lease
+```
+
+### Why `--force-with-lease`?
+
+Rebase **rewrites commit history** — every commit on `dev` gets a new hash after being replayed on top of `main`. This means your local `dev` and `origin/dev` now have the same files but different commit hashes. Git sees them as diverged and will reject a normal `git push`. Force-push is not optional with rebase; it is inherent to how rebase works.
+
+`--force-with-lease` is the safe variant: it checks that nobody else has pushed to `origin/dev` since you last fetched. If they have, it refuses and alerts you — protecting you from overwriting someone else's work.
+
+### Why rebase instead of merge?
+
+The alternative is `git merge main` into `dev`, which works but adds a merge commit:
+
+| Method | Force-push needed | History |
+| --- | --- | --- |
+| `git merge main` | No | Extra merge commit on `dev` |
+| `git rebase main` (recommended) | Yes (`--force-with-lease`) | Clean, linear history |
+
+With rebase, when you open the next PR, GitHub shows only your new commits — no merge commit noise cluttering the diff.
+
+---
+
 ## Deep Dive — How `kubectl port-forward` Works
 
 > This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
