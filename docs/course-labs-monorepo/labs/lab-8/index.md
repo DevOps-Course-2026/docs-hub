@@ -1153,6 +1153,99 @@ The cluster never diverges from git. You do not push to the cluster; you push to
 
 ---
 
+## Task 8 — Observe the GitOps Loop Live
+
+This task has no YAML to write and no `kubectl apply` to run. You will make one change in git, push it, and watch ArgoCD reconcile the cluster automatically.
+
+### Step 1 — Check the current pod count
+
+```bash
+kubectl get pods -n myapp-dev
+```
+
+You should see **1 pod** running — matching `replicaCount: 1` in `values-dev.yaml`.
+
+---
+
+### Step 2 — Edit the values file
+
+In your local `helm-gitops-demo` repo, open `charts/myapp/values-dev.yaml` and change:
+
+```yaml
+# before
+replicaCount: 1
+```
+
+```yaml
+# after
+replicaCount: 2
+```
+
+---
+
+### Step 3 — Commit and push to the `dev` branch
+
+```bash
+git add charts/myapp/values-dev.yaml
+git commit -m "chore: scale dev to 2 replicas"
+git push origin dev
+```
+
+That is the only action you take. From this point, ArgoCD does the rest.
+
+---
+
+### Step 4 — Watch ArgoCD detect the change
+
+ArgoCD polls the registered repo every **3 minutes** by default. You can either wait, or trigger an immediate sync manually:
+
+```bash
+argocd app sync myapp-dev
+```
+
+Check the application status:
+
+```bash
+argocd app get myapp-dev
+```
+
+Look for the `STATUS` column transitioning: **Synced** → **OutOfSync** → **Synced**.
+
+---
+
+### Step 5 — Verify the pods scaled up
+
+```bash
+kubectl get pods -n myapp-dev
+```
+
+#### Expected output
+
+```text
+NAME                     READY   STATUS    RESTARTS   AGE
+myapp-xxxxxxxxxx-aaaaa   1/1     Running   0          5m
+myapp-xxxxxxxxxx-bbbbb   1/1     Running   0          30s
+```
+
+![kubectl get pods -n myapp-dev after scaling to 2](./assets/task8-pods-dev-scaled.png)
+
+Two pods — ArgoCD detected the `replicaCount` change in git and scaled the Deployment without any manual `kubectl` or `helm` command from you.
+
+---
+
+### Summary
+
+| What happened | Where |
+| --- | --- |
+| You changed `replicaCount: 1 → 2` | `charts/myapp/values-dev.yaml` on `dev` branch |
+| ArgoCD detected the commit | Polls repo every ~3 min (or manual `argocd app sync`) |
+| ArgoCD re-rendered the chart | Applied updated Deployment spec to the cluster |
+| Kubernetes scaled up | 1 → 2 pods in `myapp-dev` namespace |
+
+This is the GitOps loop in action: **git is the source of truth, the cluster follows**.
+
+---
+
 ## Deep Dive — How `kubectl port-forward` Works
 
 > This section is optional. It covers the internals of the port-forward tunnel — how it is established, why it is tied to your terminal, and how it is secured without SSH keys.
