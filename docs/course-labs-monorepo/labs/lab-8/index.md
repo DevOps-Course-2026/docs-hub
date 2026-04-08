@@ -579,6 +579,18 @@ In this task you register explicitly.
 
 ### Step 2 — Log In to ArgoCD
 
+> **If you restarted Minikube:** After a restart, `argocd-repo-server` can get stuck in `Unknown` status with no endpoint, causing `connection refused` errors on any ArgoCD CLI command. Fix it before proceeding:
+>
+> ```bash
+> kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-repo-server
+> # NAME                                  READY   STATUS    RESTARTS   AGE
+> # argocd-repo-server-54d8d8fcbf-c55kl   0/1     Unknown   0          12m
+>
+> kubectl delete pod -n argocd -l app.kubernetes.io/name=argocd-repo-server
+> ```
+>
+> Deleting the stuck pod forces the ReplicaSet to create a new one. Confirm recovery with `kubectl get endpoints argocd-repo-server -n argocd` — the endpoint should populate within a few seconds.
+
 ```bash
 argocd login localhost:8080 --username admin --password <password>
 ```
@@ -617,6 +629,8 @@ argocd repo list
 TYPE  NAME  REPO                                                               INSECURE  OCI    LFS    CREDS  STATUS      MESSAGE
 git         https://github.com/DevOps-Course-2026/helm-gitops-demo.git         false     false  false  false  Successful
 ```
+
+![argocd repo list output](./assets/task5-repo-list.png)
 
 | Column | Meaning |
 | --- | --- |
@@ -789,6 +803,314 @@ sequenceDiagram
 | `CREDS: false` | No credentials stored | The repo is public — anonymous HTTPS is sufficient |
 
 In the next task, you will create the first ArgoCD Application and point it at the `dev` branch.
+
+---
+
+## Task 6 — Create the Dev Application
+
+An **ArgoCD Application** is a Kubernetes Custom Resource — `kind: Application`, `apiVersion: argoproj.io/v1alpha1`. ArgoCD installs this CRD when you deploy it. Without ArgoCD, `kubectl apply` on this file would fail because Kubernetes would not recognise the kind.
+
+> **Why this works now but wouldn't have before Task 2:** When you ran `kubectl apply -n argocd -f install.yaml` in Task 2, ArgoCD registered several CRDs with the Kubernetes API server — including `applications.argoproj.io`. You can verify they exist:
+>
+> ```bash
+> kubectl get crd | grep argoproj
+> ```
+>
+> ```text
+> applications.argoproj.io
+> applicationsets.argoproj.io
+> appprojects.argoproj.io
+> ```
+>
+> Before Task 2 that command returns nothing, and attempting `kubectl apply` on this file would return: `error: resource mapping not found for "myapp-dev" ... cannot find group "argoproj.io"`. The CRD is what teaches Kubernetes what `kind: Application` means.
+
+The pattern is identical to deploying any other resource: write a YAML file, run `kubectl apply`. The difference is:
+
+- The resource lives in the `argocd` namespace — that is ArgoCD's control plane
+- The *workload* (nginx pods) lands in `myapp-dev` — a separate namespace the Application points at
+- The Application is the glue between Git and the cluster; the Deployment/Service/etc. are what ArgoCD creates in the target namespace
+
+Creating an Application by YAML file and creating one through the ArgoCD UI produce the same result — the UI is just a form that generates this YAML and applies it internally.
+
+---
+
+### Step 1 — Create the Application Manifest
+
+In the `helm-gitops-demo` repository, create a directory for ArgoCD manifests:
+
+```bash
+mkdir -p argocd
+```
+
+Create `argocd/dev-app.yaml`:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: myapp-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/DevOps-Course-2026/helm-gitops-demo.git
+    targetRevision: dev
+    path: charts/myapp
+    helm:
+      valueFiles:
+        - values-dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: myapp-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+#### Field Breakdown
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `metadata.namespace` | `argocd` | The Application object lives here — ArgoCD's control plane namespace |
+| `spec.source.repoURL` | `helm-gitops-demo.git` | The repo registered in Task 5 |
+| `spec.source.targetRevision` | `dev` | The branch to watch |
+| `spec.source.path` | `charts/myapp` | Path inside the repo where the Helm chart lives |
+| `spec.source.helm.valueFiles` | `values-dev.yaml` | Override file — 1 replica, dev image tag |
+| `spec.destination.server` | `https://kubernetes.default.svc` | Deploy to the same cluster ArgoCD runs in |
+| `spec.destination.namespace` | `myapp-dev` | Target namespace for the workload — separate from `argocd` |
+| `syncPolicy.automated` | enabled | ArgoCD syncs automatically when Git changes |
+| `syncPolicy.automated.prune` | `true` | Deletes resources from the cluster when they are removed from Git |
+| `syncPolicy.automated.selfHeal` | `true` | Re-syncs if someone manually changes resources in the cluster |
+| `syncOptions.CreateNamespace` | `true` | ArgoCD creates `myapp-dev` if it does not exist — no separate `kubectl create namespace` needed |
+
+---
+
+### Step 2 — Apply the Application
+
+```bash
+kubectl apply -f argocd/dev-app.yaml
+```
+
+#### Expected Output
+
+```text
+application.argoproj.io/myapp-dev created
+```
+
+The `application.argoproj.io` prefix confirms this is the ArgoCD CRD — not a built-in Kubernetes resource.
+
+---
+
+### Step 3 — Verify the Application
+
+Check the Application status:
+
+```bash
+argocd app get myapp-dev
+```
+
+Within a few seconds (polling interval) or immediately if webhooks are configured, you should see:
+
+```text
+Name:               argocd/myapp-dev
+Project:            default
+Server:             https://kubernetes.default.svc
+Namespace:          myapp-dev
+URL:                https://localhost:8080/applications/myapp-dev
+Source:
+- Repo:             https://github.com/DevOps-Course-2026/helm-gitops-demo.git
+  Target:           dev
+  Path:             charts/myapp
+  Helm Values:      values-dev.yaml
+SyncStatus:         Synced to dev
+HealthStatus:       Healthy
+```
+
+![argocd app get myapp-dev output](./assets/task6-app-get-dev.png)
+
+Verify the workload landed in the right namespace:
+
+```bash
+kubectl get pods -n myapp-dev
+```
+
+```text
+NAME                     READY   STATUS    RESTARTS   AGE
+myapp-xxxxxxxxxx-xxxxx   1/1     Running   0          30s
+```
+
+One pod — matching `replicaCount: 1` from `values-dev.yaml`.
+
+---
+
+### What `prune` and `selfHeal` Mean
+
+| Option | Without it | With it |
+| --- | --- | --- |
+| `prune: true` | Resources deleted from Git stay running in the cluster — cluster drifts ahead of Git | ArgoCD deletes cluster resources that no longer exist in Git |
+| `selfHeal: true` | Manual `kubectl` changes to the cluster persist — cluster drifts behind Git | ArgoCD overwrites manual changes on the next reconciliation loop |
+
+Together they enforce strict GitOps: **Git is always the source of truth**. Any deviation — whether a deleted manifest or a manual `kubectl edit` — is corrected automatically.
+
+> **Warning:** With `selfHeal: true`, any manual `kubectl` change to a managed resource will be reverted within 3 minutes (the default reconciliation interval). In production this is the desired behaviour. During debugging, either disable auto-sync temporarily or make the change in Git.
+
+---
+
+### Summary
+
+| What | Why |
+| --- | --- |
+| `kind: Application` | ArgoCD CRD — not a built-in Kubernetes resource |
+| `namespace: argocd` | Application object lives in ArgoCD's namespace; workloads go to `myapp-dev` |
+| `targetRevision: dev` | Watches the `dev` branch — changes there trigger a sync |
+| `prune` + `selfHeal` | Git is the sole source of truth — cluster drift is corrected automatically |
+| `CreateNamespace: true` | No manual namespace creation needed |
+
+---
+
+### Production Note — Repo Topology
+
+> This section is a forward-looking note. It does not change anything you do in this lab — it explains how the pattern scales to a real multi-service project.
+
+In this lab `helm-gitops-demo` holds both the Helm chart **and** the ArgoCD Application YAMLs in the same repo. That is fine for learning but collapses two distinct concerns into one.
+
+**The proper model separates four concerns into four types of repository:**
+
+| Repo | Contains | Who writes to it |
+| --- | --- | --- |
+| `my-api` (one per service) | Application source code, Dockerfile | Developers |
+| `my-frontend` (one per service) | Application source code, Dockerfile | Developers |
+| `helm-charts` (dedicated, like `helm-gitops-demo`) | **Helm charts** for all services — one chart per subdirectory | Platform team / developers |
+| `gitops-config` | **ArgoCD Application YAMLs**, per-environment values overrides | CI pipeline (automated) + platform team |
+
+You already have the dedicated Helm charts repo — that is exactly what `helm-gitops-demo` is. The missing piece in production is splitting the ArgoCD Application YAMLs out into their own `gitops-config` repo, separate from the charts.
+
+**Where the ArgoCD Application YAMLs live in `gitops-config`:**
+
+```text
+gitops-config/
+  apps/
+    dev/
+      my-api.yaml       ← Application: helm-charts repo, dev branch, values-dev.yaml
+      my-frontend.yaml  ← Application: helm-charts repo, dev branch, values-dev.yaml
+    prod/
+      my-api.yaml       ← Application: helm-charts repo, main branch, values-prod.yaml
+      my-frontend.yaml  ← Application: helm-charts repo, main branch, values-prod.yaml
+```
+
+**CI/CD is the bridge between the app repos and `gitops-config`:**
+
+```text
+my-api (developer pushes code)
+  └─► GitHub Actions: build image → push to registry
+                    → commit image tag bump → gitops-config/apps/dev/my-api.yaml
+                                                        ↓
+                                    ArgoCD detects new commit in gitops-config
+                                                        ↓
+                                          Syncs my-api to the cluster
+```
+
+The CI pipeline is the *only* thing that writes image tag updates to `gitops-config`. ArgoCD *only reads* from it. Developers never push to `gitops-config` directly for day-to-day deployments — only for structural changes like adding a new service.
+
+**In this lab**, the ArgoCD Application YAMLs live in `helm-gitops-demo/argocd/` — no separate repo is needed. The single repo is simpler for learning the mechanics, and registering `helm-gitops-demo` with ArgoCD (Task 5) already gives ArgoCD access to both the chart and the Application files from one URL.
+
+**For the final project**, create a dedicated `gitops-config` repo and put all ArgoCD Application YAMLs there. Register it with ArgoCD alongside the Helm charts repo. `helm-gitops-demo` is not reused in the final project — it is a sandbox for this lab.
+
+---
+
+---
+
+## Task 7 — Create the Prod Application
+
+With the dev Application running, creating the prod Application is almost identical. The only differences are the name, target branch, values file, and destination namespace.
+
+### Step 1 — Create the Application Manifest
+
+Create `argocd/prod-app.yaml`:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: myapp-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/DevOps-Course-2026/helm-gitops-demo.git
+    targetRevision: main
+    path: charts/myapp
+    helm:
+      valueFiles:
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: myapp-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+#### What changed from `dev-app.yaml`
+
+| Field | Dev | Prod |
+| --- | --- | --- |
+| `metadata.name` | `myapp-dev` | `myapp-prod` |
+| `spec.source.targetRevision` | `dev` | `main` |
+| `spec.source.helm.valueFiles` | `values-dev.yaml` | `values-prod.yaml` |
+| `spec.destination.namespace` | `myapp-dev` | `myapp-prod` |
+
+Everything else — `repoURL`, `path`, `syncPolicy` — is identical.
+
+---
+
+### Step 2 — Apply the Application
+
+```bash
+kubectl apply -f argocd/prod-app.yaml
+```
+
+#### Expected Output
+
+```text
+application.argoproj.io/myapp-prod created
+```
+
+---
+
+### Step 3 — Verify the Application
+
+```bash
+argocd app get myapp-prod
+kubectl get pods -n myapp-prod
+```
+
+```text
+NAME                     READY   STATUS    RESTARTS   AGE
+myapp-xxxxxxxxxx-xxxxx   1/1     Running   0          30s
+myapp-xxxxxxxxxx-yyyyy   1/1     Running   0          30s
+myapp-xxxxxxxxxx-zzzzz   1/1     Running   0          30s
+```
+
+![kubectl get pods -n myapp-prod](./assets/task7-pods-prod.png)
+
+Three pods — matching `replicaCount: 3` from `values-prod.yaml`.
+
+---
+
+### Summary
+
+| What | Why |
+| --- | --- |
+| `targetRevision: main` | Watches the `main` branch — production deployments track `main` |
+| `values-prod.yaml` | 3 replicas for production workload |
+| `namespace: myapp-prod` | Isolated from dev workloads in `myapp-dev` |
 
 ---
 
