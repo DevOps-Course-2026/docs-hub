@@ -17,7 +17,7 @@ Each lab lives in its own folder with a `README.md` describing the goal, prerequ
 | Lab | Topic |
 | --- | --- |
 | [Lab 8](./labs/lab-8/) | ArgoCD & GitOps |
-| [Lab 9](./labs/lab-9/) | IaC - Infrastructure as Code |
+| [Lab 12](./labs/lab-12/) | IaC - Infrastructure as Code |
 
 > Labs will be added as the course progresses.
 
