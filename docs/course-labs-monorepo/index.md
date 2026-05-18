@@ -18,6 +18,7 @@ Each lab lives in its own folder with a `README.md` describing the goal, prerequ
 | --- | --- |
 | [Lab 8](./labs/lab-8/) | ArgoCD & GitOps |
 | [Lab 12](./labs/lab-12/) | IaC - Infrastructure as Code |
+| [Lab 13](./labs/lab-13/) | RabbitMQ Queue Systems: Producers, Consumers, and Message Flow |
 
 > Labs will be added as the course progresses.
 
